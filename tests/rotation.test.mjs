@@ -45,3 +45,6 @@ test('ambiguous write failure aborts rotation and does not retry',async()=>{
 test('duplicate keywords rejected before observation',async()=>{
   const f=fixture();await assert.rejects(runRotation([row(),row()],'PC',120,f.ports));assert.equal(f.reads.length,0);
 });
+test('stop between final check and write does not count an increase',async()=>{
+ const f=fixture({apply:async()=>false});const result=await runRotation([row('a'),row('b')],'PC',120,f.ports);assert.equal(result.stopped,true);assert.equal(result.changes,0);assert.equal(f.events.length,0);
+});

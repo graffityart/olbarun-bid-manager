@@ -1,0 +1,20 @@
+[Unit]
+Description=Olbarun Naver bid worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/olbarun/bid-manager
+EnvironmentFile=/opt/olbarun/bid-manager/.env.worker
+ExecStart=/usr/bin/node /opt/olbarun/bid-manager/scripts/bid-worker.mjs
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=100
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
