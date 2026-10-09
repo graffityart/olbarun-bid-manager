@@ -6,3 +6,5 @@
 .connect-form{display:grid;gap:15px;margin:24px 0;padding:22px;background:#f6f8f5;border-radius:10px}.connect-form label{font-size:14px}.connect-form input{display:block;width:100%;margin-top:7px}.connect-form button{justify-self:start}.connect-form p{font-size:13px}
 
 .auto-panel{background:white;border:1px solid #dfe6e1;border-radius:10px;padding:22px;margin:20px 0}.auto-controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:18px}.auto-controls label{font-size:14px}.auto-panel h2{margin-bottom:7px}.auto-panel .table-wrap{margin-top:18px}
+
+.device-choice{display:flex;gap:8px;margin-top:16px}.device-choice button{flex:1;padding:10px 12px}.device-active{background:#123c31;color:white}
