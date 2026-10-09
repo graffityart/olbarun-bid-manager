@@ -8,7 +8,7 @@ import {decryptCredentials} from '../lib/credentials.ts';
 import {siteForGroup} from '../lib/ad-sites.ts';
 import {runRotation} from '../lib/rotation.ts';
 import {makeAutoJob} from '../lib/auto-job.ts';
-import {assertAutoBid} from '../lib/auto-bid.ts';
+import {assertAutoBid,cappedActualBid} from '../lib/auto-bid.ts';
 if(!process.env.DATABASE_URL || !process.env.APP_PASSWORD || process.env.APP_PASSWORD.length<16) throw Error('DATABASE_URL and original APP_PASSWORD are required');
 const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1,connectionTimeoutMillis:10000});
 const db=await pool.connect(); // Advisory lock belongs to this exact persistent session.
@@ -62,6 +62,12 @@ async function execute(job){
      const kw=await request(c,'GET',`/ncc/keywords/${encodeURIComponent(id)}`);
      stage='네이버 그룹 조회';
      const group=await request(c,'GET',`/ncc/adgroups/${encodeURIComponent(kw.nccAdgroupId)}`);
+     const actualCap=cappedActualBid(r,kw,group);
+     if(actualCap!==null){
+      // Reconcile only the displayed bid. Never change target/max or Naver bid.
+      await db.query("UPDATE bid_states SET data=jsonb_set(data::jsonb,ARRAY['rows',x.idx::text,'bid'],$1::jsonb)::text FROM (SELECT (ordinality-1) idx FROM bid_states,jsonb_array_elements(data::jsonb->'rows') WITH ORDINALITY e WHERE id='main' AND e.value->>'id'=$2) x WHERE bid_states.id='main'",[JSON.stringify(actualCap),id]);
+      return {status:'capped',bid:actualCap};
+     }
      const observation=await load(`rank:${job.device}:${id}`);
      stage="현재 입찰가·광고 상태 검증";
      assertAutoBid(r,original,kw,group,expected,next,observation,job.device,Date.now());

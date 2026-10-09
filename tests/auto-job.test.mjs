@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {makeAutoJob} from '../lib/auto-job.ts';
-import {assertAutoBid} from '../lib/auto-bid.ts';
+import {assertAutoBid,cappedActualBid} from '../lib/auto-bid.ts';
 const row={id:'a',keyword:'부산철거',group:'파워링크#1_광고그룹#1',bid:90,max:100,target:4};
 const state={mode:'live',device:'PC',rows:[row]};
 test('queue uses saved keywords and rejects demo, wrong device, duplicates and unconfigured groups',()=>{
@@ -16,4 +16,12 @@ test('effective group bid is checked rather than unused keyword bid',()=>{check(
 test('no write with stale, absent, wrong-device, target rank, paused ads, changed settings or cap',()=>{
  for(const o of [{...observation,status:'not_in_observed_list',rank:null},{...observation,rank:4},{...observation,device:'MOBILE'},{...observation,observedAt:new Date(now-60001).toISOString()}])assert.throws(()=>check(row,kw,group,o));
  assert.throws(()=>check({...row,max:90}));assert.throws(()=>check({...row,target:3}));assert.throws(()=>check(row,{...kw,userLock:true}));assert.throws(()=>check(row,kw,{...group,status:'PAUSED'}));assert.throws(()=>check(row,kw,group,observation,110));
+});
+
+test('actual cap uses keyword or inherited group bid and verifies identity',()=>{
+ assert.equal(cappedActualBid({...row,max:930},{...kw,useGroupBidAmt:false,bidAmt:1500},group),1500);
+ assert.equal(cappedActualBid({...row,max:930},kw,{...group,bidAmt:1500}),1500);
+ assert.equal(cappedActualBid({...row,max:930},{...kw,useGroupBidAmt:false,bidAmt:930},group),930);
+ assert.equal(cappedActualBid({...row,max:930},kw,group),null);
+ assert.throws(()=>cappedActualBid(row,{...kw,nccKeywordId:'another'},group));
 });

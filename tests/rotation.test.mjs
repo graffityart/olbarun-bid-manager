@@ -48,3 +48,12 @@ test('duplicate keywords rejected before observation',async()=>{
 test('stop between final check and write does not count an increase',async()=>{
  const f=fixture({apply:async()=>false});const result=await runRotation([row('a'),row('b')],'PC',120,f.ports);assert.equal(result.stopped,true);assert.equal(result.changes,0);assert.equal(f.events.length,0);
 });
+
+test('actual bid above cap skips that keyword and continues to the next',async()=>{
+ const f=fixture();const calls=[];
+ f.ports.apply=async(id,before,after)=>{calls.push(id);if(id==='above')return {status:'capped',bid:1500};f.writes.push([id,before,after]);};
+ const result=await runRotation([row('above',{max:930}),row('next')],'PC',120,f.ports);
+ assert.deepEqual(calls,['above','next']);assert.deepEqual(f.writes,[['next',90,100]]);
+ assert.equal(result.changes,1);assert.equal(result.stopped,false);
+ assert.deepEqual(f.events[0],{id:'above',status:'capped',bid:1500});
+});

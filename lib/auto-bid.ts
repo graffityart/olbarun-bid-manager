@@ -8,3 +8,11 @@ export function assertAutoBid(row:any, original:any, kw:any, group:any, expected
  if(kw.status!=='ELIGIBLE'||group.status!=='ELIGIBLE')throw Error('Naver keyword or group is not eligible');
  if(effective!==expected)throw Error(`Naver effective bid differs: saved=${expected}, actual=${effective}`);
 }
+
+// A stale saved bid must not turn an actual bid above the cap into a write.
+export function cappedActualBid(row:any, kw:any, group:any):number|null {
+ if(kw.nccKeywordId!==row.id||kw.keyword!==row.keyword||kw.nccAdgroupId!==group.nccAdgroupId||group.name!==row.group||group.adgroupType!=='WEB_SITE')throw Error('Naver keyword/group identity changed');
+ const bid=kw.useGroupBidAmt?group.bidAmt:kw.bidAmt;
+ if(!Number.isInteger(bid)||bid<70||bid%10)throw Error('Invalid Naver effective bid');
+ return bid+10>row.max?bid:null;
+}
