@@ -12,7 +12,7 @@ const kw={nccKeywordId:'a',keyword:row.keyword,nccAdgroupId:'g',bidAmt:70,useGro
 const group={nccAdgroupId:'g',name:row.group,adgroupType:'WEB_SITE',bidAmt:90,status:'ELIGIBLE',userLock:false};
 const now=Date.now(),observation={status:'visible',device:'PC',rank:8,observedAt:new Date(now).toISOString()};
 const check=(r=row,k=kw,g=group,o=observation,next=100)=>assertAutoBid(r,row,k,g,90,next,o,'PC',now);
-test('effective group bid is checked rather than unused keyword bid',()=>{check();assert.throws(()=>check(row,kw,{...group,bidAmt:100}));check(row,{...kw,useGroupBidAmt:false,bidAmt:90});});
+test('effective group bid is checked rather than unused keyword bid',()=>{check();assert.throws(()=>check(row,kw,{...group,bidAmt:100}),/saved=90, actual=100/);check(row,{...kw,useGroupBidAmt:false,bidAmt:90});});
 test('no write with stale, absent, wrong-device, target rank, paused ads, changed settings or cap',()=>{
  for(const o of [{...observation,status:'not_in_observed_list',rank:null},{...observation,rank:4},{...observation,device:'MOBILE'},{...observation,observedAt:new Date(now-60001).toISOString()}])assert.throws(()=>check(row,kw,group,o));
  assert.throws(()=>check({...row,max:90}));assert.throws(()=>check({...row,target:3}));assert.throws(()=>check(row,{...kw,userLock:true}));assert.throws(()=>check(row,kw,{...group,status:'PAUSED'}));assert.throws(()=>check(row,kw,group,observation,110));
