@@ -57,3 +57,9 @@ test('actual bid above cap skips that keyword and continues to the next',async()
  assert.equal(result.changes,1);assert.equal(result.stopped,false);
  assert.deepEqual(f.events[0],{id:'above',status:'capped',bid:1500});
 });
+
+test('live baseline result displays actual ten-won increase rather than stale saved bid',async()=>{
+ const f=fixture({apply:async()=>({status:'increased',bid:90})});
+ const result=await runRotation([row('a')],'PC',120,f.ports);
+ assert.equal(result.changes,1);assert.deepEqual(f.events[0],{id:'a',status:'increased',bid:90});
+});

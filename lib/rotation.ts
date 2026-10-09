@@ -5,9 +5,9 @@ export type RotationPorts = {
   now(): number;
   stopped(): Promise<boolean>;
   observe(row: RotationRow, device: 'PC' | 'MOBILE'): Promise<RankResult>;
-  // Must compare the expected bid with the effective Naver bid before writing.
-  // A mismatch or ambiguous network result must throw; never retry a write blindly.
-  apply(id: string, expectedBid: number, nextBid: number): Promise<void | boolean | {status: 'capped'; bid: number}>;
+  // Revalidate settings and the live effective bid before writing. Return the
+  // actual bid when using a refreshed baseline; never retry an ambiguous write.
+  apply(id: string, expectedBid: number, nextBid: number): Promise<void | boolean | {status: 'capped' | 'increased'; bid: number}>;
   event(event: RotationEvent): Promise<void>;
   wait(seconds: number): Promise<void>;
 };
@@ -48,7 +48,7 @@ export async function runRotation(rows: RotationRow[], device: 'PC' | 'MOBILE', 
       continue;
     }
     changes++;
-    await ports.event({ id: row.id, status: 'increased', bid: row.bid + 10 });
+    await ports.event({ id: row.id, status: 'increased', bid: applied && typeof applied === 'object' ? applied.bid : row.bid + 10 });
   }
   if (changes && !await stopped()) {
     await ports.event({ status: 'waiting' });

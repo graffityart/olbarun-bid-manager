@@ -68,6 +68,10 @@ async function execute(job){
       await db.query("UPDATE bid_states SET data=jsonb_set(data::jsonb,ARRAY['rows',x.idx::text,'bid'],$1::jsonb)::text FROM (SELECT (ordinality-1) idx FROM bid_states,jsonb_array_elements(data::jsonb->'rows') WITH ORDINALITY e WHERE id='main' AND e.value->>'id'=$2) x WHERE bid_states.id='main'",[JSON.stringify(actualCap),id]);
       return {status:'capped',bid:actualCap};
      }
+     // The live effective bid is the baseline; never add ten to stale UI data.
+     expected=kw.useGroupBidAmt?group.bidAmt:kw.bidAmt;
+     next=expected+10;
+     r.bid=expected;
      const observation=await load(`rank:${job.device}:${id}`);
      stage="현재 입찰가·광고 상태 검증";
      assertAutoBid(r,original,kw,group,expected,next,observation,job.device,Date.now());
@@ -86,6 +90,7 @@ async function execute(job){
      const log={keyword:r.keyword,before:expected,after:next,time:new Date().toISOString(),kind:'자동입찰',device:job.device,jobId:job.jobId};
      await db.query('INSERT INTO bid_logs(id,data,created) VALUES($1,$2,$3)',[attempt.id,JSON.stringify(log),log.time]);
      await save('bid-attempt:'+attempt.id,{...attempt,state:'confirmed'});
+     return {status:'increased',bid:next};
     },
     event:async e=>{await update({message:e.status==='waiting'?`입찰 반영 ${job.waitSeconds}초 대기`:e.status==='unknown'?'순위 미확인 · 금액 유지':e.status==='reached'?'목표 이내 · 금액 유지':e.status==='capped'?'최대 입찰가 · 금액 유지':e.status==='increased'?'+10원 적용':'중지 확인',lastEvent:e});},
    });

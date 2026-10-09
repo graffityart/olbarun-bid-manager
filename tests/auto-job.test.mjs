@@ -25,3 +25,9 @@ test('actual cap uses keyword or inherited group bid and verifies identity',()=>
  assert.equal(cappedActualBid({...row,max:930},kw,group),null);
  assert.throws(()=>cappedActualBid(row,{...kw,nccKeywordId:'another'},group));
 });
+
+test('fresh actual bid can be the baseline while target and cap remain unchanged',()=>{
+ const actual={...kw,useGroupBidAmt:false,bidAmt:80};
+ assertAutoBid({...row,bid:80},row,actual,group,80,90,observation,'PC',now);
+ assert.equal(cappedActualBid(row,actual,group),null);
+});
