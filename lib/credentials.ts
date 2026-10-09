@@ -1,0 +1,5 @@
+import {createHash,randomBytes,createCipheriv,createDecipheriv} from "node:crypto";
+export type Credentials={NAVER_CUSTOMER_ID:string;NAVER_API_KEY:string;NAVER_SECRET_KEY:string};
+function key(){if(!process.env.APP_PASSWORD||process.env.APP_PASSWORD.length<16)throw Error("접속 비밀번호 설정이 필요합니다.");return createHash("sha256").update("naver-credentials:v1:"+process.env.APP_PASSWORD).digest()}
+export function encryptCredentials(value:Credentials){const iv=randomBytes(12),cipher=createCipheriv("aes-256-gcm",key(),iv);const content=Buffer.concat([cipher.update(JSON.stringify(value),"utf8"),cipher.final()]);return JSON.stringify({version:1,iv:iv.toString("base64"),tag:cipher.getAuthTag().toString("base64"),content:content.toString("base64")})}
+export function decryptCredentials(value:string):Credentials{const data=JSON.parse(value);const cipher=createDecipheriv("aes-256-gcm",key(),Buffer.from(data.iv,"base64"));cipher.setAuthTag(Buffer.from(data.tag,"base64"));return JSON.parse(Buffer.concat([cipher.update(Buffer.from(data.content,"base64")),cipher.final()]).toString("utf8"))}

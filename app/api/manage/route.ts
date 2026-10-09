@@ -1,19 +1,23 @@
 import {database} from "@/lib/db";
 export const runtime="nodejs";
 export const maxDuration=60;
-const e=process.env;
+import {encryptCredentials,decryptCredentials,type Credentials} from "@/lib/credentials";
+async function credentials():Promise<Credentials|null>{const row=await db().prepare("SELECT data FROM bid_states WHERE id=?").bind("credentials").first();if(row){try{return decryptCredentials(row.data)}catch{throw Error("저장한 연결 정보를 읽을 수 없습니다. 비밀번호를 변경했다면 네이버 정보를 다시 연결하세요.")}}const e=process.env;return e.NAVER_CUSTOMER_ID&&e.NAVER_API_KEY&&e.NAVER_SECRET_KEY?{NAVER_CUSTOMER_ID:e.NAVER_CUSTOMER_ID,NAVER_API_KEY:e.NAVER_API_KEY,NAVER_SECRET_KEY:e.NAVER_SECRET_KEY}:null}
 const db=database;
-async function naver(method:string,path:string,body?:unknown){
- if(!e.NAVER_CUSTOMER_ID||!e.NAVER_API_KEY||!e.NAVER_SECRET_KEY)throw new Error("네이버 광고 연결이 필요합니다. 연결 안내를 확인하세요.");
+async function naver(method:string,path:string,body?:unknown,supplied?:Credentials){
+ const e=supplied??await credentials();
+ if(!e||!e.NAVER_CUSTOMER_ID||!e.NAVER_API_KEY||!e.NAVER_SECRET_KEY)throw new Error("네이버 광고 연결이 필요합니다. 연결 안내를 확인하세요.");
  const ts=Date.now().toString();const key=await crypto.subtle.importKey("raw",new TextEncoder().encode(e.NAVER_SECRET_KEY),{name:"HMAC",hash:"SHA-256"},false,["sign"]);
  const sig=await crypto.subtle.sign("HMAC",key,new TextEncoder().encode(`${ts}.${method}.${path.split("?")[0]}`));const signature=btoa(String.fromCharCode(...new Uint8Array(sig)));
  const r=await fetch(`https://api.searchad.naver.com${path}`,{method,headers:{"Content-Type":"application/json","X-Timestamp":ts,"X-API-KEY":e.NAVER_API_KEY,"X-Customer":e.NAVER_CUSTOMER_ID,"X-Signature":signature},...(body?{body:JSON.stringify(body)}:{})});
  if(!r.ok)throw new Error(`네이버 API 요청 실패 (${r.status}). 연결 정보와 권한을 확인하세요.`);return r.json() as Promise<any>;
 }
-export async function GET(){try{const row=await db().prepare("SELECT data FROM bid_states WHERE id = ?").bind("main").first();const logs=await db().prepare("SELECT data FROM bid_logs ORDER BY created DESC LIMIT 100").all();return Response.json({connected:!!(e.NAVER_API_KEY&&e.NAVER_CUSTOMER_ID&&e.NAVER_SECRET_KEY),state:row?JSON.parse(row.data):null,logs:logs.results.map((r:any)=>JSON.parse(r.data))})}catch(err){return Response.json({error:(err as Error).message},{status:503})}}
+export async function GET(){try{const row=await db().prepare("SELECT data FROM bid_states WHERE id = ?").bind("main").first();const logs=await db().prepare("SELECT data FROM bid_logs ORDER BY created DESC LIMIT 100").all();return Response.json({connected:await credentials().then(Boolean).catch(()=>false),state:row?JSON.parse(row.data):null,logs:logs.results.map((r:any)=>JSON.parse(r.data))})}catch(err){return Response.json({error:(err as Error).message},{status:503})}}
 export async function POST(req:Request){try{
  const origin=req.headers.get("origin");if(origin&&new URL(origin).host!==req.headers.get("host"))return Response.json({error:"다른 사이트에서 보낸 요청은 허용되지 않습니다."},{status:403});
  const b=await req.json() as any;
+ if(b.action==="connect"){const c:Credentials={NAVER_CUSTOMER_ID:String(b.customerId??"").trim(),NAVER_API_KEY:String(b.apiKey??"").trim(),NAVER_SECRET_KEY:String(b.secretKey??"").trim()};if(!/^\d+$/.test(c.NAVER_CUSTOMER_ID)||!c.NAVER_API_KEY||!c.NAVER_SECRET_KEY||c.NAVER_API_KEY.length>1000||c.NAVER_SECRET_KEY.length>1000)throw Error("Customer ID와 API 정보를 확인하세요.");const campaigns=await naver("GET","/ncc/campaigns",undefined,c);await db().prepare("INSERT INTO bid_states (id,data) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data").bind("credentials",encryptCredentials(c)).run();return Response.json({ok:true,campaignCount:Array.isArray(campaigns)?campaigns.length:0})}
+
  if(b.action==="save"){if(!Array.isArray(b.rows)||b.rows.length>5000)throw new Error("키워드 목록이 올바르지 않습니다.");await db().prepare("INSERT INTO bid_states (id,data) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data").bind("main",JSON.stringify({rows:b.rows,mode:b.mode})).run();return Response.json({ok:true})}
  if(b.action==="sync"){const groups=await naver("GET","/ncc/adgroups");const rows=[];for(const g of groups){if(g.adgroupType!=="WEB_SITE")continue;const keywords=await naver("GET",`/ncc/keywords?nccAdgroupId=${encodeURIComponent(g.nccAdgroupId)}`);for(const k of keywords)rows.push({id:k.nccKeywordId,keyword:k.keyword,group:g.name,bid:k.useGroupBidAmt?g.bidAmt:k.bidAmt,min:70,max:1500,target:4,step:10,enabled:false,selected:false});}return Response.json({rows})}
  if(b.action==="estimate"){if(!Array.isArray(b.rows)||b.rows.length>50)throw new Error("한 번에 50개 이하를 선택하세요.");const items=await naver("POST","/estimate/average-position-bid/keyword",{device:b.device==="PC"?"PC":"MOBILE",items:b.rows.map((r:any)=>({key:r.keyword,position:r.target}))});return Response.json({items:items.estimate??items})}
