@@ -1,0 +1,4 @@
+const encoder=new TextEncoder();
+async function signature(value:string){const password=process.env.APP_PASSWORD;if(!password||password.length<16)throw Error("APP_PASSWORD를 16자 이상으로 설정하세요.");const key=await crypto.subtle.importKey("raw",encoder.encode(password),{name:"HMAC",hash:"SHA-256"},false,["sign"]);return Array.from(new Uint8Array(await crypto.subtle.sign("HMAC",key,encoder.encode(value)))).map(b=>b.toString(16).padStart(2,"0")).join("")}
+export async function createSession(){const body=`${Date.now()+8*3600000}.${crypto.randomUUID()}`;return `${body}.${await signature(body)}`}
+export async function validSession(token:string|undefined){if(!token)return false;const parts=token.split(".");if(parts.length!==3||!Number.isFinite(+parts[0])||+parts[0]<Date.now())return false;try{return await signature(parts.slice(0,2).join("."))===parts[2]}catch{return false}}
