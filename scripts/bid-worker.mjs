@@ -73,6 +73,12 @@ async function execute(job){
      next=expected+10;
      r.bid=expected;
      const observation=await load(`rank:${job.device}:${id}`);
+     // More pages may expose only a display URL: verify the observed creative
+     // belongs to this Naver ad group before using that rank for a write.
+     if(observation?.source==='MORE') {
+      const creatives=await request(c,'GET',`/ncc/ads?nccAdgroupId=${encodeURIComponent(kw.nccAdgroupId)}`);
+      if(!Array.isArray(creatives)||!creatives.some(ad=>ad.nccAdId===observation.adId&&ad.nccAdgroupId===kw.nccAdgroupId))throw Error('Naver keyword/group identity changed');
+     }
      stage="현재 입찰가·광고 상태 검증";
      assertAutoBid(r,original,kw,group,expected,next,observation,job.device,Date.now());
      const attempt={id:randomUUID(),jobId:job.jobId,keyword:r.keyword,before:expected,after:next,state:'pending',time:new Date().toISOString()};
