@@ -65,7 +65,7 @@ async function execute(job){
      };
      let output=await query();
      if(searchAccessDenied(output)){
-      const retryAt=Date.now()+30*60*1000;
+      const retryAt=Date.now()+10*60*1000;
       await save('search-access',{state:'blocked',retryAt,updatedAt:new Date().toISOString()});
       await save(`rank:${job.device}:${r.id}`,{id:r.id,keyword:r.keyword,device:job.device,host,status:'access_denied',rank:null,observedAt:new Date().toISOString(),observedCount:0});
       while(Date.now()<retryAt){
@@ -76,7 +76,7 @@ async function execute(job){
       if(await stopped())return {rank:null,device:job.device,observedAt:Date.now()};
       output=await query();
       if(searchAccessDenied(output)){
-       await save('search-access',{state:'blocked',retryAt:Date.now()+30*60*1000,updatedAt:new Date().toISOString()});
+       await save('search-access',{state:'blocked',retryAt:Date.now()+10*60*1000,updatedAt:new Date().toISOString()});
        throw new SearchAccessDenied();
       }
       if(!output)throw new SearchAccessDenied();
