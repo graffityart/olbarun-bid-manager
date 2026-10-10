@@ -20,6 +20,8 @@ export async function POST(req:Request){try{
  const origin=req.headers.get("origin");if(origin&&new URL(origin).host!==req.headers.get("host"))return Response.json({error:"다른 사이트에서 보낸 요청은 허용되지 않습니다."},{status:403});
  const b=await req.json() as any;
  if(b.action==="auto-start"){
+ const access=await db().prepare("SELECT data FROM bid_states WHERE id=?").bind("search-access").first();const a=access?JSON.parse(access.data):null;
+ if(a?.state==="blocked"&&a.retryAt>Date.now())throw Error("네이버 검색 접근 거부(403)로 조회를 쉬고 있습니다. 재확인 가능 시각: "+new Date(a.retryAt).toLocaleTimeString("ko-KR",{timeZone:"Asia/Seoul"}));
  const saved=await db().prepare("SELECT data FROM bid_states WHERE id=?").bind("main").first();
  const worker=await db().prepare("SELECT data FROM bid_states WHERE id=?").bind("auto-worker").first();const w=worker?JSON.parse(worker.data):null;
  if(!w||w.state!=="online"||!Number.isFinite(Date.parse(w.updatedAt))||Date.now()-Date.parse(w.updatedAt)>90000)throw Error("VPS 자동입찰 서비스를 먼저 실행하세요. 서버 연결이 확인되지 않았습니다.");

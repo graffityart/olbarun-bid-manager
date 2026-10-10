@@ -1,3 +1,4 @@
+import { searchAccessDenied, SearchAccessDenied } from '../lib/search-access.ts';
 import { reflectionRemaining } from '../lib/reflection-wait.ts';
 // Persistent VPS worker. No job is created here; only authenticated UI requests run.
 import pg from 'pg';
@@ -58,9 +59,31 @@ async function execute(job){
      }
      const queryStartedAt=Date.now();
      await heartbeat();const r=byId.get(row.id),host=siteForGroup(r.group);let observation;
-     try{const {stdout}=await run(process.execPath,[checker,r.keyword,host,job.device],{timeout:75000,maxBuffer:1024*1024});observation=JSON.parse(stdout);
-      if(observation.keyword!==r.keyword||observation.device!==job.device||observation.expectedHost!==host)throw Error('identity');
-     }catch{observation={status:'unknown',rank:null,observedAt:new Date().toISOString(),observedCount:0};}
+     const query=async()=>{
+      try{const {stdout}=await run(process.execPath,[checker,r.keyword,host,job.device],{timeout:75000,maxBuffer:1024*1024});return stdout;}
+      catch(error){if(searchAccessDenied(String(error.stdout??'')))return String(error.stdout);return '';}
+     };
+     let output=await query();
+     if(searchAccessDenied(output)){
+      const retryAt=Date.now()+30*60*1000;
+      await save('search-access',{state:'blocked',retryAt,updatedAt:new Date().toISOString()});
+      await save(`rank:${job.device}:${r.id}`,{id:r.id,keyword:r.keyword,device:job.device,host,status:'access_denied',rank:null,observedAt:new Date().toISOString(),observedCount:0});
+      while(Date.now()<retryAt){
+       if(await stopped())return {rank:null,device:job.device,observedAt:Date.now()};
+       await update({message:`네이버 검색 접근 거부(403) · 전체 조회 중단 · ${new Date(retryAt).toLocaleTimeString('ko-KR',{timeZone:'Asia/Seoul'})} 한 번 재확인`,retryAt});
+       await heartbeat();await sleep(Math.min(5000,retryAt-Date.now()));
+      }
+      if(await stopped())return {rank:null,device:job.device,observedAt:Date.now()};
+      output=await query();
+      if(searchAccessDenied(output)){
+       await save('search-access',{state:'blocked',retryAt:Date.now()+30*60*1000,updatedAt:new Date().toISOString()});
+       throw new SearchAccessDenied();
+      }
+      if(!output)throw new SearchAccessDenied();
+      await save('search-access',{state:'available',updatedAt:new Date().toISOString()});
+     }
+     try{observation=JSON.parse(output);if(observation.keyword!==r.keyword||observation.device!==job.device||observation.expectedHost!==host)throw Error('identity');}
+     catch{observation={status:'unknown',rank:null,observedAt:new Date().toISOString(),observedCount:0};}
      const oldRank=await load(`rank:${job.device}:${r.id}`);
      await save(`rank:${job.device}:${r.id}`,{id:r.id,keyword:r.keyword,device:job.device,host,...observation,ads:undefined,optimization:oldRank?.optimization});
      completed++;await update({completed:Math.min(completed,rows.length),message:'순위 조회 · '+r.keyword});
@@ -170,7 +193,7 @@ async function execute(job){
  }catch(error){
   // Only explicitly whitelisted errors are shown; never persist raw network/credential errors.
   const detail=/^(Naver API HTTP \d{3}|Naver effective bid differs: saved=\d+, actual=\d+|Naver keyword\/group identity changed|Naver keyword or group is paused|Naver keyword or group is not eligible|Settings changed|Rank is not fresh or outside target)$/.test(error.message)?error.message:'상세 점검 필요';
-  const message=`${activeKeyword?activeKeyword+' · ':''}${stage} 실패: ${detail}`;
+  const message=error.name==='SearchAccessDenied'?'네이버 검색 접근 거부(403) · 재확인 실패로 자동입찰 종료 · 금액 유지':`${activeKeyword?activeKeyword+' · ':''}${stage} 실패: ${detail}`;
   console.error(message);await update({state:'failed',stage,message,errorCode:detail});
  }
  const current=await load('auto');

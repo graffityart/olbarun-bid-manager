@@ -84,7 +84,7 @@ try {
         if (pageIndex===4) {moreStatus='limit_reached';break;}
         moreUrl=next;
       }
-    } catch { moreStatus='unknown'; result={status:'unknown',rank:null,adId:null}; source=null; }
+    } catch(error) { if(error.message==='Search HTTP 403')throw error; moreStatus='unknown'; result={status:'unknown',rank:null,adId:null}; source=null; }
   }
   console.log(JSON.stringify({keyword,expectedHost,device,observedAt:new Date().toISOString(),...result,
     source,mainRank,moreRank,mainObservedCount:ads.length,moreObservedCount,morePages,moreStatus,

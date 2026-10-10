@@ -27,7 +27,7 @@ export async function runRotation(rows: RotationRow[], device: 'PC' | 'MOBILE', 
   };
   const observe = async (row: RotationRow) => {
     try { return await ports.observe(row, device); }
-    catch { return { rank: null, observedAt: ports.now(), device }; }
+    catch (error) { if(error instanceof Error && error.name==='SearchAccessDenied')throw error; return { rank: null, observedAt: ports.now(), device }; }
   };
   for (const row of rows) {
     if (await stopped()) return { changes, stopped: true };
