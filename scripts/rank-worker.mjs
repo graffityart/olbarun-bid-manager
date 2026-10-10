@@ -37,6 +37,7 @@ try {
     completed, startedAt, updatedAt: startedAt, mode: 'read-only' });
   for (const row of rows) {
     if (stop) break;
+    const queryStartedAt = Date.now();
     const host = siteForGroup(row.group);
     let result = { status: 'unknown', rank: null, error: 'Unconfigured advertising group' };
     if (host) {
@@ -60,7 +61,7 @@ try {
       completed, startedAt, updatedAt: new Date().toISOString(), mode: 'read-only' });
     console.log(JSON.stringify({ keyword: row.keyword, device: state.device,
       status: result.status, rank: result.rank, completed, total: rows.length }));
-    if (completed < rows.length && !stop) await new Promise(resolve => setTimeout(resolve, 3000));
+    if (completed < rows.length && !stop) await new Promise(resolve => setTimeout(resolve, Math.max(0, 3000 - (Date.now() - queryStartedAt))));
   }
   await save('rank-worker', { state: stop ? 'stopped' : 'completed', device: state.device,
     total: rows.length, completed, startedAt, updatedAt: new Date().toISOString(), mode: 'read-only' });

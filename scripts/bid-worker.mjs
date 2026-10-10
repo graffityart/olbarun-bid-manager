@@ -46,6 +46,7 @@ async function execute(job){
    const result=await runRotation(rows,job.device,job.waitSeconds,{
     now:()=>Date.now(),stopped,wait:async seconds=>{await heartbeat();await sleep(seconds*1000)},
     observe:async row=>{
+     const queryStartedAt=Date.now();
      await heartbeat();const r=byId.get(row.id),host=siteForGroup(r.group);let observation;
      try{const {stdout}=await run(process.execPath,[checker,r.keyword,host,job.device],{timeout:75000,maxBuffer:1024*1024});observation=JSON.parse(stdout);
       if(observation.keyword!==r.keyword||observation.device!==job.device||observation.expectedHost!==host)throw Error('identity');
@@ -53,7 +54,7 @@ async function execute(job){
      const oldRank=await load(`rank:${job.device}:${r.id}`);
      await save(`rank:${job.device}:${r.id}`,{id:r.id,keyword:r.keyword,device:job.device,host,...observation,ads:undefined,optimization:oldRank?.optimization});
      completed++;await update({completed:Math.min(completed,rows.length),message:'순위 조회 · '+r.keyword});
-     await sleep(3000);
+     await sleep(Math.max(0,3000-(Date.now()-queryStartedAt)));
      return {rank:observation.status==='visible'?observation.rank:null,device:job.device,observedAt:Date.parse(observation.observedAt)};
     },
     ...(job.strategy==='cost'?{manage:async(row,fresh)=>{
