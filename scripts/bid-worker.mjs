@@ -87,7 +87,7 @@ async function execute(job){
      const oldRank=await load(`rank:${job.device}:${r.id}`);
      await save(`rank:${job.device}:${r.id}`,{id:r.id,keyword:r.keyword,device:job.device,host,...observation,ads:undefined,optimization:oldRank?.optimization});
      completed++;await update({completed:Math.min(completed,rows.length),message:'순위 조회 · '+r.keyword});
-     await sleep(Math.max(0,3000-(Date.now()-queryStartedAt)));
+     await sleep(Math.max(0,15000-(Date.now()-queryStartedAt)));
      return {rank:observation.status==='visible'?observation.rank:null,device:job.device,observedAt:Date.parse(observation.observedAt)};
     },
     ...(job.strategy==='cost'?{manage:async(row,fresh)=>{

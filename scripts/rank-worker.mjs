@@ -61,7 +61,7 @@ try {
       completed, startedAt, updatedAt: new Date().toISOString(), mode: 'read-only' });
     console.log(JSON.stringify({ keyword: row.keyword, device: state.device,
       status: result.status, rank: result.rank, completed, total: rows.length }));
-    if (completed < rows.length && !stop) await new Promise(resolve => setTimeout(resolve, Math.max(0, 3000 - (Date.now() - queryStartedAt))));
+    if (completed < rows.length && !stop) await new Promise(resolve => setTimeout(resolve, Math.max(0, 15000 - (Date.now() - queryStartedAt))));
   }
   await save('rank-worker', { state: stop ? 'stopped' : 'completed', device: state.device,
     total: rows.length, completed, startedAt, updatedAt: new Date().toISOString(), mode: 'read-only' });
