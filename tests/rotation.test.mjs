@@ -63,3 +63,9 @@ test('live baseline result displays actual ten-won increase rather than stale sa
  const result=await runRotation([row('a')],'PC',120,f.ports);
  assert.equal(result.changes,1);assert.deepEqual(f.events[0],{id:'a',status:'increased',bid:90});
 });
+test('durable per-keyword waiting does not add a global wait after writes', async()=>{
+ const f=fixture({deferReflectionWait:true,wait:async()=>{throw Error('Unexpected global wait');}});
+ const result=await runRotation([row()],'PC',180,f.ports);
+ assert.equal(result.changes,1);
+ assert.equal(f.events.some(e=>e.status==='waiting'),false);
+});

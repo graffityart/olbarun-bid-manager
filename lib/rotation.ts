@@ -2,6 +2,7 @@ export type RotationRow = { id: string; bid: number; target: number; max: number
 export type RankResult = { rank: number | null; observedAt: number; device: 'PC' | 'MOBILE' };
 export type RotationEvent = { id?: string; status: 'reached' | 'capped' | 'unknown' | 'increased' | 'stopped' | 'waiting' | 'reduced' | 'restored' | 'monitoring'; bid?: number };
 export type RotationPorts = {
+  deferReflectionWait?: boolean;
   now(): number;
   stopped(): Promise<boolean>;
   observe(row: RotationRow, device: 'PC' | 'MOBILE'): Promise<RankResult>;
@@ -58,7 +59,7 @@ export async function runRotation(rows: RotationRow[], device: 'PC' | 'MOBILE', 
     changes++;
     await ports.event({ id: row.id, status: 'increased', bid: applied && typeof applied === 'object' ? applied.bid : row.bid + 10 });
   }
-  if (changes && !await stopped()) {
+  if (changes && !ports.deferReflectionWait && !await stopped()) {
     await ports.event({ status: 'waiting' });
     // Chunk waits so a stop request can be noticed within five seconds.
     for (let remaining = waitSeconds; remaining > 0; remaining -= 5) {

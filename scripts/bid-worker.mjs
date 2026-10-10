@@ -1,3 +1,4 @@
+import { reflectionRemaining } from '../lib/reflection-wait.ts';
 // Persistent VPS worker. No job is created here; only authenticated UI requests run.
 import pg from 'pg';
 import {randomUUID, createHmac} from 'node:crypto';
@@ -44,8 +45,17 @@ async function execute(job){
    let completed=0; cycle++;
    await update({cycle,completed:0,total:rows.length,message:'전체 순위 조회'});
    const result=await runRotation(rows,job.device,job.waitSeconds,{
-    now:()=>Date.now(),stopped,wait:async seconds=>{await heartbeat();await sleep(seconds*1000)},
+    deferReflectionWait:true,now:()=>Date.now(),stopped,wait:async seconds=>{await heartbeat();await sleep(seconds*1000)},
     observe:async row=>{
+     const change=await load(`bid-change:${row.id}`),policy=await load(`cost:${job.device}:${row.id}`);
+     const changedAt=Math.max(change?.changedAt??0,policy?.changedAt??0);
+     let remaining=reflectionRemaining(changedAt,Date.now(),job.waitSeconds);
+     while(remaining>0){
+      if(await stopped())return {rank:null,device:job.device,observedAt:Date.now()};
+      await update({message:byId.get(row.id).keyword+` · 입찰 반영 잔여 ${remaining}초 대기`});
+      await heartbeat();await sleep(Math.min(5,remaining)*1000);
+      remaining=reflectionRemaining(changedAt,Date.now(),job.waitSeconds);
+     }
      const queryStartedAt=Date.now();
      await heartbeat();const r=byId.get(row.id),host=siteForGroup(r.group);let observation;
      try{const {stdout}=await run(process.execPath,[checker,r.keyword,host,job.device],{timeout:75000,maxBuffer:1024*1024});observation=JSON.parse(stdout);
@@ -149,7 +159,7 @@ async function execute(job){
      await save('bid-attempt:'+attempt.id,{...attempt,state:'confirmed'});
      return {status:'increased',bid:next};
     },
-    event:async e=>{if(e.status==='monitoring'){await update({lastEvent:e});return;}await update({message:e.status==='waiting'?`입찰 반영 ${job.waitSeconds}초 대기`:e.status==='unknown'?'순위 미확인 · 금액 유지':e.status==='reached'?'목표 이내 · 금액 유지':e.status==='capped'?'최대 입찰가 · 금액 유지':e.status==='increased'?'+10원 적용':e.status==='reduced'?'감액 적용 · 순위 재확인':e.status==='restored'?'이전 금액 복구':e.status==='monitoring'?'목표 순위·절감 상태 감시 중':'중지 확인',lastEvent:e});},
+    event:async e=>{if(['increased','reduced','restored'].includes(e.status)&&e.id)await save(`bid-change:${e.id}`,{changedAt:Date.now()});if(e.status==='monitoring'){await update({lastEvent:e});return;}await update({message:e.status==='waiting'?`입찰 반영 ${job.waitSeconds}초 대기`:e.status==='unknown'?'순위 미확인 · 금액 유지':e.status==='reached'?'목표 이내 · 금액 유지':e.status==='capped'?'최대 입찰가 · 금액 유지':e.status==='increased'?'+10원 적용':e.status==='reduced'?'감액 적용 · 순위 재확인':e.status==='restored'?'이전 금액 복구':e.status==='monitoring'?'목표 순위·절감 상태 감시 중':'중지 확인',lastEvent:e});},
    });
    if(result.stopped)break;
    if(job.strategy==='cost'&&!result.changes){
