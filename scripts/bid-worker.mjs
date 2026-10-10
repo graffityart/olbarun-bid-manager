@@ -19,7 +19,7 @@ process.on('SIGINT',()=>{shutdown=true});process.on('SIGTERM',()=>{shutdown=true
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const load=async id=>{const r=await db.query('SELECT data FROM bid_states WHERE id=$1',[id]);return r.rows[0]?JSON.parse(r.rows[0].data):null};
 const save=(id,value)=>db.query('INSERT INTO bid_states(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=excluded.data',[id,JSON.stringify(value)]);
-const heartbeat=()=>save('auto-worker',{strategy:'cost',state:shutdown?'stopping':'online',updatedAt:new Date().toISOString()});
+const heartbeat=()=>save('auto-worker',{lowestMode:true,strategy:'cost',state:shutdown?'stopping':'online',updatedAt:new Date().toISOString()});
 async function request(c,method,path,body){
  const ts=String(Date.now()), signature=createHmac('sha256',c.NAVER_SECRET_KEY).update(`${ts}.${method}.${path.split('?')[0]}`).digest('base64');
  const res=await fetch('https://api.searchad.naver.com'+path,{method,signal:AbortSignal.timeout(20000),headers:{'Content-Type':'application/json','X-Timestamp':ts,'X-API-KEY':c.NAVER_API_KEY,'X-Customer':c.NAVER_CUSTOMER_ID,'X-Signature':signature},...(body?{body:JSON.stringify(body)}:{})});
@@ -77,7 +77,7 @@ async function execute(job){
       await update({message:r.keyword+' · 실제 금액 갱신 · 다음 조회 후 판단'});
       return {changed:false,status:'monitoring',bid:actual};
      }
-     const decision=costDecision({bid:actual,min:r.min??70,max:r.max,target:r.target,rank:fresh.rank,source:observation?.source??null,device:job.device,group:r.group,observedAt:fresh.observedAt,now:Date.now(),waitSeconds:job.waitSeconds},previous);
+     const decision=costDecision({bid:actual,min:r.min??70,max:r.max,target:r.target,rank:fresh.rank,source:observation?.source??null,device:job.device,group:r.group,observedAt:fresh.observedAt,now:Date.now(),waitSeconds:job.waitSeconds,stableChecks:job.lowestRank?5:undefined,exactRank:!!job.lowestRank,reductionAmount:job.lowestRank?(r.step??10):undefined},previous);
      if(decision.action==='hold'){await display(decision.state,decision.reason);return {changed:false,status:'monitoring',bid:actual};}
      if(observation?.source==='MORE'){
       const creatives=await request(c,'GET',`/ncc/ads?nccAdgroupId=${encodeURIComponent(kw.nccAdgroupId)}`);

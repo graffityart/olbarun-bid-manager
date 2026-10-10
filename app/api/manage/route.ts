@@ -26,8 +26,10 @@ export async function POST(req:Request){try{
  if(w.strategy!=="cost")throw Error("VPS 코드를 업데이트하고 작업기를 재시작하세요. 자동 절감 기능 준비가 필요합니다.");
  if(!await credentials())throw Error("네이버 연결 정보를 먼저 저장하세요.");
  const savedState=saved?JSON.parse(saved.data):null;
- const job={...makeAutoJob(savedState,Array.isArray(b.rows)?b.rows.map((r:any)=>r.id):[],b.device,b.waitSeconds,crypto.randomUUID()),group:b.group};
+ const job={...makeAutoJob(savedState,Array.isArray(b.rows)?b.rows.map((r:any)=>r.id):[],b.device,b.waitSeconds,crypto.randomUUID()),group:b.group,lowestRank:b.lowestRank??null,strategy:b.lowestRank===null?"increase":"cost"};
  assertGroupSelection(savedState.rows,job.ids,b.group);
+ if(b.lowestRank!==undefined&&b.lowestRank!==null&&(!Number.isInteger(b.lowestRank)||b.lowestRank<1||b.lowestRank>5||job.ids.some((id:string)=>savedState.rows.find((r:any)=>r.id===id)?.target!==b.lowestRank)))throw Error("최저가 순위와 키워드 목표 순위를 확인하세요.");
+ if(b.lowestRank!==undefined&&!w.lowestMode)throw Error("최저가 모드 사용을 위해 VPS 코드를 업데이트하고 재시작하세요.");
  const result=await db().prepare("INSERT INTO bid_states(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE bid_states.data::jsonb->>'state' NOT IN ('queued','running','stop_requested')").bind("auto",JSON.stringify(job)).run();
  if(!result.rowCount)throw Error("이미 실행 중입니다. 중지 후 다시 실행하세요.");return Response.json({...job,message:"실행 요청을 저장했습니다. VPS에서 전체 순위 조회를 시작합니다."});}
  if(b.action==="auto-stop"){

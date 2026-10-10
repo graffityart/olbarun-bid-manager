@@ -74,3 +74,10 @@ test('stable market simulation reaches 310 and only probes ten below the discove
  const d=choose({...s,pending:undefined,appliedBid:310,failedBid:undefined,stable:3,cooldownUntil:0,changedAt:0,fine:true},{bid:310,rank:1,now:t,observedAt:t});
  assert.equal(d.next,300);
 });
+
+test('lowest mode requires five exact-rank observations and reduces by the configured unit once',()=>{
+ let s;let d;for(let i=0;i<5;i++){d=choose(s,{rank:3,target:3,stableChecks:5,exactRank:true,reductionAmount:20,now:base.now+i*180000,observedAt:base.now+i*180000});s=d.state;if(i<4)assert.equal(d.action,'hold');}
+ assert.equal(d.action,'reduce');assert.equal(d.next,880);
+ const mismatch=choose(s,{rank:2,target:3,stableChecks:5,exactRank:true,reductionAmount:20,now:base.now+1000000,observedAt:base.now+1000000});assert.equal(mismatch.action,'hold');assert.equal(mismatch.state.stable,0);
+});
+test('invalid reduction units never change bids',()=>{for(const unit of [0,15,110])assert.equal(choose(stable().state,{reductionAmount:unit}).action,'hold');});
