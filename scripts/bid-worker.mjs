@@ -7,8 +7,9 @@ import {fileURLToPath} from 'node:url';
 import {decryptCredentials} from '../lib/credentials.ts';
 import {siteForGroup} from '../lib/ad-sites.ts';
 import {runRotation} from '../lib/rotation.ts';
+import {costDecision,costApplied} from '../lib/cost-policy.ts';
 import {makeAutoJob} from '../lib/auto-job.ts';
-import {assertAutoBid,cappedActualBid} from '../lib/auto-bid.ts';
+import {assertAutoBid,cappedActualBid,assertCostBid} from '../lib/auto-bid.ts';
 if(!process.env.DATABASE_URL || !process.env.APP_PASSWORD || process.env.APP_PASSWORD.length<16) throw Error('DATABASE_URL and original APP_PASSWORD are required');
 const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1,connectionTimeoutMillis:10000});
 const db=await pool.connect(); // Advisory lock belongs to this exact persistent session.
@@ -18,7 +19,7 @@ process.on('SIGINT',()=>{shutdown=true});process.on('SIGTERM',()=>{shutdown=true
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const load=async id=>{const r=await db.query('SELECT data FROM bid_states WHERE id=$1',[id]);return r.rows[0]?JSON.parse(r.rows[0].data):null};
 const save=(id,value)=>db.query('INSERT INTO bid_states(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=excluded.data',[id,JSON.stringify(value)]);
-const heartbeat=()=>save('auto-worker',{state:shutdown?'stopping':'online',updatedAt:new Date().toISOString()});
+const heartbeat=()=>save('auto-worker',{strategy:'cost',state:shutdown?'stopping':'online',updatedAt:new Date().toISOString()});
 async function request(c,method,path,body){
  const ts=String(Date.now()), signature=createHmac('sha256',c.NAVER_SECRET_KEY).update(`${ts}.${method}.${path.split('?')[0]}`).digest('base64');
  const res=await fetch('https://api.searchad.naver.com'+path,{method,signal:AbortSignal.timeout(20000),headers:{'Content-Type':'application/json','X-Timestamp':ts,'X-API-KEY':c.NAVER_API_KEY,'X-Customer':c.NAVER_CUSTOMER_ID,'X-Signature':signature},...(body?{body:JSON.stringify(body)}:{})});
@@ -49,11 +50,60 @@ async function execute(job){
      try{const {stdout}=await run(process.execPath,[checker,r.keyword,host,job.device],{timeout:75000,maxBuffer:1024*1024});observation=JSON.parse(stdout);
       if(observation.keyword!==r.keyword||observation.device!==job.device||observation.expectedHost!==host)throw Error('identity');
      }catch{observation={status:'unknown',rank:null,observedAt:new Date().toISOString(),observedCount:0};}
-     await save(`rank:${job.device}:${r.id}`,{id:r.id,keyword:r.keyword,device:job.device,host,...observation,ads:undefined});
+     const oldRank=await load(`rank:${job.device}:${r.id}`);
+     await save(`rank:${job.device}:${r.id}`,{id:r.id,keyword:r.keyword,device:job.device,host,...observation,ads:undefined,optimization:oldRank?.optimization});
      completed++;await update({completed:Math.min(completed,rows.length),message:'순위 조회 · '+r.keyword});
      await sleep(3000);
      return {rank:observation.status==='visible'?observation.rank:null,device:job.device,observedAt:Date.parse(observation.observedAt)};
     },
+    ...(job.strategy==='cost'?{manage:async(row,fresh)=>{
+     const id=row.id,latest=await load('main');makeAutoJob(latest,job.ids,job.device,job.waitSeconds,job.jobId);
+     const r=latest.rows.find(r=>r.id===id),original=byId.get(id);activeKeyword=r?.keyword??id;stage='감액 설정 검증';
+     if(!r||r.target!==original.target||r.max!==original.max||r.min!==original.min||r.group!==original.group||r.keyword!==original.keyword)throw Error('Settings changed');
+     const key=`cost:${job.device}:${id}`,previous=await load(key),observation=await load(`rank:${job.device}:${id}`);
+     const display=async(policy,reason)=>{
+      await save(key,policy);
+      await save(`rank:${job.device}:${id}`,{...observation,optimization:{status:reason,goodBid:policy.goodBid??null,pending:policy.pending??null,cooldownUntil:policy.cooldownUntil,changedAt:policy.changedAt}});
+      await update({message:r.keyword+' · '+reason});
+     };
+     if(!fresh.rank){if(previous)await display({...previous,stable:0},'순위 미확인 · 금액 유지');return {changed:false,status:'unknown',bid:r.bid};}
+     stage='네이버 현재 금액 조회';
+     const kw=await request(c,'GET',`/ncc/keywords/${encodeURIComponent(id)}`);
+     const group=await request(c,'GET',`/ncc/adgroups/${encodeURIComponent(kw.nccAdgroupId)}`);
+     cappedActualBid(r,kw,group);const actual=kw.useGroupBidAmt?group.bidAmt:kw.bidAmt;
+     if(r.bid!==actual){
+      await db.query("UPDATE bid_states SET data=jsonb_set(data::jsonb,ARRAY['rows',x.idx::text,'bid'],$1::jsonb)::text FROM (SELECT (ordinality-1) idx FROM bid_states,jsonb_array_elements(data::jsonb->'rows') WITH ORDINALITY e WHERE id='main' AND e.value->>'id'=$2) x WHERE bid_states.id='main'",[JSON.stringify(actual),id]);
+      // Never make a second change using a rank captured at an uncertain bid.
+      await update({message:r.keyword+' · 실제 금액 갱신 · 다음 조회 후 판단'});
+      return {changed:false,status:'monitoring',bid:actual};
+     }
+     const decision=costDecision({bid:actual,min:r.min??70,max:r.max,target:r.target,rank:fresh.rank,source:observation?.source??null,device:job.device,group:r.group,observedAt:fresh.observedAt,now:Date.now(),waitSeconds:job.waitSeconds},previous);
+     if(decision.action==='hold'){await display(decision.state,decision.reason);return {changed:false,status:'monitoring',bid:actual};}
+     if(observation?.source==='MORE'){
+      const creatives=await request(c,'GET',`/ncc/ads?nccAdgroupId=${encodeURIComponent(kw.nccAdgroupId)}`);
+      if(!Array.isArray(creatives)||!creatives.some(ad=>ad.nccAdId===observation.adId&&ad.nccAdgroupId===kw.nccAdgroupId))throw Error('Naver keyword/group identity changed');
+     }
+     stage='증감액 안전 검증';
+     assertCostBid(r,original,kw,group,actual,decision.next,observation,job.device,Date.now(),decision.action);
+     const attempt={id:randomUUID(),jobId:job.jobId,keywordId:id,keyword:r.keyword,before:actual,after:decision.next,action:decision.action,state:'pending',time:new Date().toISOString()};
+     if(await stopped())return {changed:false,stopped:true,status:'stopped',bid:actual};
+     // Persist the expected amount before PUT. An ambiguous result stays blocked
+     // across restarts/new jobs until this exact amount is confirmed externally.
+     const blocked=costApplied(decision.state,decision.action,actual,decision.next,Date.now());
+     await save('bid-attempt:'+attempt.id,attempt);await save(key,blocked);
+     if(await stopped()){await save(key,previous??decision.state);await save('bid-attempt:'+attempt.id,{...attempt,state:'cancelled'});return {changed:false,stopped:true,status:'stopped',bid:actual};}
+     stage='네이버 증감액 적용';
+     await request(c,'PUT','/ncc/keywords?fields=bidAmt',[{...kw,bidAmt:decision.next,useGroupBidAmt:false}]);
+     const confirmed=await request(c,'GET',`/ncc/keywords/${encodeURIComponent(id)}`);
+     if(confirmed.bidAmt!==decision.next||confirmed.useGroupBidAmt)throw Error('Settings changed');
+     const applied=costApplied(decision.state,decision.action,actual,decision.next,Date.now());
+     await display(applied,decision.action==='reduce'?'감액 시험 · 반영 확인 대기':decision.action==='restore'?'이전 금액 복구 · 순위 재확인':'10원 증액 · 반영 확인 대기');
+     await db.query("UPDATE bid_states SET data=jsonb_set(data::jsonb,ARRAY['rows',x.idx::text,'bid'],$1::jsonb)::text FROM (SELECT (ordinality-1) idx FROM bid_states,jsonb_array_elements(data::jsonb->'rows') WITH ORDINALITY e WHERE id='main' AND e.value->>'id'=$2) x WHERE bid_states.id='main'",[JSON.stringify(decision.next),id]);
+     const log={keyword:r.keyword,keywordId:id,before:actual,after:decision.next,time:new Date().toISOString(),kind:decision.action==='reduce'?'자동감액':decision.action==='restore'?'순위복구':'자동입찰',device:job.device,source:observation.source,jobId:job.jobId};
+     await db.query('INSERT INTO bid_logs(id,data,created) VALUES($1,$2,$3)',[attempt.id,JSON.stringify(log),log.time]);
+     await save('bid-attempt:'+attempt.id,{...attempt,state:'confirmed'});
+     return {changed:true,bid:decision.next,status:decision.action==='reduce'?'reduced':decision.action==='restore'?'restored':'increased'};
+    }}:{}),
     apply:async(id,expected,next)=>{
      const latest=await load('main');makeAutoJob(latest,job.ids,job.device,job.waitSeconds,job.jobId);
      const r=latest.rows.find(r=>r.id===id),original=byId.get(id);activeKeyword=r?.keyword??id;stage="설정 검증";
@@ -98,10 +148,13 @@ async function execute(job){
      await save('bid-attempt:'+attempt.id,{...attempt,state:'confirmed'});
      return {status:'increased',bid:next};
     },
-    event:async e=>{await update({message:e.status==='waiting'?`입찰 반영 ${job.waitSeconds}초 대기`:e.status==='unknown'?'순위 미확인 · 금액 유지':e.status==='reached'?'목표 이내 · 금액 유지':e.status==='capped'?'최대 입찰가 · 금액 유지':e.status==='increased'?'+10원 적용':'중지 확인',lastEvent:e});},
+    event:async e=>{if(e.status==='monitoring'){await update({lastEvent:e});return;}await update({message:e.status==='waiting'?`입찰 반영 ${job.waitSeconds}초 대기`:e.status==='unknown'?'순위 미확인 · 금액 유지':e.status==='reached'?'목표 이내 · 금액 유지':e.status==='capped'?'최대 입찰가 · 금액 유지':e.status==='increased'?'+10원 적용':e.status==='reduced'?'감액 적용 · 순위 재확인':e.status==='restored'?'이전 금액 복구':e.status==='monitoring'?'목표 순위·절감 상태 감시 중':'중지 확인',lastEvent:e});},
    });
    if(result.stopped)break;
-   if(!result.changes){await update({state:'completed',message:'증액 대상 없음 · 목표/상한/미확인 상태 확인'});break;}
+   if(job.strategy==='cost'&&!result.changes){
+    await update({message:'순위 감시 중 · 다음 전체 조회 대기'});
+    for(let remaining=job.waitSeconds;remaining>0&&!await stopped();remaining-=5){await heartbeat();await sleep(Math.min(5,remaining)*1000);}
+   }else if(!result.changes){await update({state:'completed',message:'증액 대상 없음 · 목표/상한/미확인 상태 확인'});break;}
   }
  }catch(error){
   // Only explicitly whitelisted errors are shown; never persist raw network/credential errors.

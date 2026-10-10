@@ -1,6 +1,6 @@
 export type RotationRow = { id: string; bid: number; target: number; max: number };
 export type RankResult = { rank: number | null; observedAt: number; device: 'PC' | 'MOBILE' };
-export type RotationEvent = { id?: string; status: 'reached' | 'capped' | 'unknown' | 'increased' | 'stopped' | 'waiting'; bid?: number };
+export type RotationEvent = { id?: string; status: 'reached' | 'capped' | 'unknown' | 'increased' | 'stopped' | 'waiting' | 'reduced' | 'restored' | 'monitoring'; bid?: number };
 export type RotationPorts = {
   now(): number;
   stopped(): Promise<boolean>;
@@ -8,6 +8,7 @@ export type RotationPorts = {
   // Revalidate settings and the live effective bid before writing. Return the
   // actual bid when using a refreshed baseline; never retry an ambiguous write.
   apply(id: string, expectedBid: number, nextBid: number): Promise<void | boolean | {status: 'capped' | 'increased'; bid: number}>;
+  manage?(row: RotationRow, observation: RankResult): Promise<{changed:boolean;stopped?:boolean;bid:number;status:RotationEvent['status']}>;
   event(event: RotationEvent): Promise<void>;
   wait(seconds: number): Promise<void>;
 };
@@ -36,6 +37,13 @@ export async function runRotation(rows: RotationRow[], device: 'PC' | 'MOBILE', 
     let observation = observations.get(row.id)!;
     if (ports.now() - observation.observedAt > 60000) observation = await observe(row);
     const valid = observation.device === device && Number.isInteger(observation.rank) && observation.rank! > 0 && Number.isFinite(observation.observedAt) && observation.observedAt <= ports.now() && ports.now() - observation.observedAt <= 60000;
+    if (ports.manage) {
+      const managed=await ports.manage(row,valid?observation:{...observation,rank:null});
+      if(managed.stopped)return {changes,stopped:true};
+      if(managed.changed)changes++;
+      await ports.event({id:row.id,status:managed.status,bid:managed.bid});
+      continue;
+    }
     if (!valid) { await ports.event({ id: row.id, status: 'unknown', bid: row.bid }); continue; }
     if (observation.rank! <= row.target) { await ports.event({ id: row.id, status: 'reached', bid: row.bid }); continue; }
     if (row.bid + 10 > row.max) { await ports.event({ id: row.id, status: 'capped', bid: row.bid }); continue; }
