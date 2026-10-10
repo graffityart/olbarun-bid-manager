@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {validRankList,matchRank,safeMoreUrl} from '../lib/rank-observation.ts';
+import {mobileMoreBatch,validRankList,matchRank,safeMoreUrl} from '../lib/rank-observation.ts';
 import {runRotation} from '../lib/rotation.ts';
 const ad=(rank,host='example.com')=>({rank,adId:`nad-test-${rank}`,destination:`https://${host}`,displayUrl:host});
 test('more rank 18 is retained and produces one ten-won increase',async()=>{
@@ -37,4 +37,15 @@ test('more navigation stays on the same keyword, device and next page',()=>{
  assert.equal(safeMoreUrl(pc,'test','PC',3),null);
  assert.equal(safeMoreUrl('https://ader.naver.com/search.naver?query=test','test','PC'),null);
  assert.equal(safeMoreUrl('https://m.ad.search.naver.com/search.naver?query=test&where=m_expd','test','MOBILE',1)?.includes('m.ad.search'),true);
+});
+
+test('mobile next page keeps verified list positions and rejects missing results',()=>{
+ const page=Array.from({length:10},(_,i)=>({...ad(i+1),destination:null}));
+ assert.equal(mobileMoreBatch(page,15)[0].rank,16);
+ assert.equal(mobileMoreBatch(page.map((a,i)=>({...a,rank:i+16})),15)[9].rank,25);
+ assert.equal(mobileMoreBatch([page[0],page[2]],15),null);
+ assert.equal(mobileMoreBatch([page[0],{...page[1],adId:page[0].adId}],15),null);
+ const url='https://m.ad.search.naver.com/search.naver?query=test&page=2';
+ assert.equal(safeMoreUrl(url,'test','MOBILE',2),url);
+ assert.equal(safeMoreUrl(url,'test','MOBILE',3),null);
 });

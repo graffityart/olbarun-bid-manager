@@ -15,7 +15,15 @@ export function matchRank(ads: ObservedAd[], host: string) {
 export function safeMoreUrl(raw: string, keyword: string, device: string, pageIndex?: number): string | null {
  try { const u=new URL(raw); const host=device==='PC'?'ad.search.naver.com':'m.ad.search.naver.com';
   if(u.protocol!=='https:'||u.hostname!==host||u.username||u.password||u.pathname!=='/search.naver'||u.searchParams.get('query')!==keyword) return null;
-  if(pageIndex!==undefined && Number(u.searchParams.get('pagingIndex')??'1')!==pageIndex) return null;
+  if(pageIndex!==undefined && Number(u.searchParams.get('pagingIndex')??(device==='MOBILE'?u.searchParams.get('page'):null)??'1')!==pageIndex) return null;
   return u.href;
  } catch {return null;}
+}
+
+// A verified next page may use local counters. Derive its list position only
+// after validating every preceding result and the complete local sequence.
+export function mobileMoreBatch(ads: ObservedAd[], offset: number): ObservedAd[] | null {
+ if(validRankList(ads,offset+1,true))return ads;
+ if(offset>0&&validRankList(ads,1,true))return ads.map(a=>({...a,rank:a.rank!+offset}));
+ return null;
 }

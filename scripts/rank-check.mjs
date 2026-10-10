@@ -1,6 +1,6 @@
 import { chromium, devices } from 'playwright';
 import { normalizeAdHost } from '../lib/ad-sites.ts';
-import { validRankList, matchRank, safeMoreUrl } from '../lib/rank-observation.ts';
+import { mobileMoreBatch,validRankList, matchRank, safeMoreUrl } from '../lib/rank-observation.ts';
 
 const [keyword, rawHost, device = 'PC'] = process.argv.slice(2);
 const expectedHost = rawHost && normalizeAdHost(rawHost);
@@ -57,10 +57,11 @@ try {
         const remaining = deadline-Date.now();
         if (remaining < 1000) throw Error('More observation time limit');
         const moreResponse = await page.goto(moreUrl, {waitUntil:'domcontentloaded',timeout:Math.min(15000,remaining)});
+        if(moreResponse?.status()===403)throw Error('Search HTTP 403');
         if (moreResponse?.status() !== 200 || !safeMoreUrl(page.url(),keyword,device,pageIndex)) throw Error('More page identity changed');
         const moreSelector = device === 'PC' ? '.ad_section.section > ol.lst_type > li.lst' : 'a.txt_link[onclick*="sct.title"]';
         await page.locator(moreSelector).first().waitFor({state:'visible',timeout:Math.min(5000,Math.max(1,deadline-Date.now()))});
-        const batch = await page.locator(moreSelector).evaluateAll((items, mobile) => items.filter(el=>el.getClientRects().length).map(el=>{
+        let batch = await page.locator(moreSelector).evaluateAll((items, mobile) => items.filter(el=>el.getClientRects().length).map(el=>{
           const link = mobile ? el : el.querySelector('a.favicon_wrap');
           const title = mobile ? el : el.querySelector('a.tit_wrap');
           const info = link?.getAttribute('onclick') ?? '';
@@ -71,6 +72,7 @@ try {
             displayUrl:(mobile?el.querySelector('.url_link'):el.querySelector('a.url'))?.textContent?.trim()??null,
             title:(mobile?el.querySelector('.tit_area'):title)?.textContent?.trim()??null};
         }),device==='MOBILE');
+        if(device==='MOBILE'){const normalized=mobileMoreBatch(batch,collected.length);if(!normalized)throw Error('More rank metadata invalid');batch=normalized;}
         if (!validRankList(batch,collected.length+1,device==='MOBILE')) throw Error('More rank metadata invalid');
         collected.push(...batch);
         if (!validRankList(collected,1,device==='MOBILE')) throw Error('Duplicate more ad IDs');
@@ -78,7 +80,7 @@ try {
         const found = matchRank(collected,expectedHost); moreStatus=found.status;
         if (found.status==='unknown') throw Error('Multiple matching ads');
         if (found.status==='visible') {result=found;source='MORE';moreRank=found.rank;observedAds=collected;break;}
-        const nextLinks = device==='PC' ? await page.locator('a.next[href]').evaluateAll(links=>links.filter(a=>a.getClientRects().length).map(a=>a.href)) : [];
+        const nextLinks = await page.locator(device==='PC'?'a.next[href]':'a[href]').evaluateAll(links=>links.filter(a=>a.getClientRects().length).map(a=>a.href));
         const next = nextLinks.map(u=>safeMoreUrl(u,keyword,device,pageIndex+1)).find(Boolean);
         if (!next) break;
         if (pageIndex===4) {moreStatus='limit_reached';break;}
@@ -88,7 +90,7 @@ try {
   }
   console.log(JSON.stringify({keyword,expectedHost,device,observedAt:new Date().toISOString(),...result,
     source,mainRank,moreRank,mainObservedCount:ads.length,moreObservedCount,morePages,moreStatus,
-    observedCount:source==='MORE'?moreObservedCount:ads.length,ads:observedAds,
+    observedCount:source==='MORE'||morePages>0?moreObservedCount:ads.length,ads:observedAds,
     note:'Read-only observation from this VPS. More ranks are separate from main search ranks. No ad clicks or bid changes.'},null,2));
 } catch (error) {
   console.log(JSON.stringify({ keyword, expectedHost, device, status: 'unknown', rank: null,
