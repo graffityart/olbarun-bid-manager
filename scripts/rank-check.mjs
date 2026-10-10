@@ -52,13 +52,14 @@ try {
   const deadline = Date.now() + 45000;
   if (valid && result.status === 'not_in_observed_list' && moreUrl) {
     const collected = [];
+    let appended = false;
     try {
       for (let pageIndex = 1; pageIndex <= 4; pageIndex++) {
         const remaining = deadline-Date.now();
         if (remaining < 1000) throw Error('More observation time limit');
-        const moreResponse = await page.goto(moreUrl, {waitUntil:'domcontentloaded',timeout:Math.min(15000,remaining)});
+        const moreResponse = appended ? null : await page.goto(moreUrl, {waitUntil:'domcontentloaded',timeout:Math.min(15000,remaining)});
         if(moreResponse?.status()===403)throw Error('Search HTTP 403');
-        if (moreResponse?.status() !== 200 || !safeMoreUrl(page.url(),keyword,device,pageIndex)) throw Error('More page identity changed');
+        if ((!appended && moreResponse?.status() !== 200) || !safeMoreUrl(page.url(),keyword,device,appended?1:pageIndex)) throw Error('More page identity changed');
         const moreSelector = device === 'PC' ? '.ad_section.section > ol.lst_type > li.lst' : 'a.txt_link[onclick*="sct.title"]';
         await page.locator(moreSelector).first().waitFor({state:'visible',timeout:Math.min(5000,Math.max(1,deadline-Date.now()))});
         let batch = await page.locator(moreSelector).evaluateAll((items, mobile) => items.filter(el=>el.getClientRects().length).map(el=>{
@@ -72,6 +73,10 @@ try {
             displayUrl:(mobile?el.querySelector('.url_link'):el.querySelector('a.url'))?.textContent?.trim()??null,
             title:(mobile?el.querySelector('.tit_area'):title)?.textContent?.trim()??null};
         }),device==='MOBILE');
+        if(appended){
+          if(!validRankList(batch,1,true)||batch.length<=collected.length||collected.some((ad,i)=>ad.adId!==batch[i]?.adId||ad.rank!==batch[i]?.rank))throw Error('More cumulative list changed');
+          batch=batch.slice(collected.length);
+        }
         if(device==='MOBILE'){const normalized=mobileMoreBatch(batch,collected.length);if(!normalized)throw Error('More rank metadata invalid');batch=normalized;}
         if (!validRankList(batch,collected.length+1,device==='MOBILE')) throw Error('More rank metadata invalid');
         collected.push(...batch);
@@ -80,6 +85,24 @@ try {
         const found = matchRank(collected,expectedHost); moreStatus=found.status;
         if (found.status==='unknown') throw Error('Multiple matching ads');
         if (found.status==='visible') {result=found;source='MORE';moreRank=found.rank;observedAds=collected;break;}
+        if(device==='MOBILE'){
+          const loadMore=page.locator('a#_get_more');
+          if(await loadMore.count() && await loadMore.isVisible()){
+            if(pageIndex===4){moreStatus='limit_reached';break;}
+            const before=collected.length;
+            let denied=false;
+            const checkResponse=response=>{if(response.status()===403)denied=true;};
+            page.on('response',checkResponse);
+            try{
+              await loadMore.click({timeout:Math.min(5000,Math.max(1,deadline-Date.now()))});
+              await page.waitForFunction(({selector,before})=>document.querySelectorAll(selector).length>before,{selector:moreSelector,before},{timeout:Math.min(10000,Math.max(1,deadline-Date.now()))});
+            }catch(error){if(denied)throw Error('Search HTTP 403');throw error;}
+            finally{page.off('response',checkResponse);}
+            if(denied)throw Error('Search HTTP 403');
+            appended=true;
+            continue;
+          }
+        }
         const nextLinks = await page.locator(device==='PC'?'a.next[href]':'a[href]').evaluateAll(links=>links.filter(a=>a.getClientRects().length).map(a=>a.href));
         const next = nextLinks.map(u=>safeMoreUrl(u,keyword,device,pageIndex+1)).find(Boolean);
         if (!next) break;
