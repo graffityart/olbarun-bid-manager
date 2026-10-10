@@ -40,6 +40,7 @@ try {
   let source = result.status === 'visible' ? 'MAIN' : null;
   let moreRank = null, moreObservedCount = 0, morePages = 0, moreStatus = null;
   let observedAds = ads;
+  let moreError = null;
   // Use the mobile search page's actual More link; never use PC results as mobile ranks.
   const moreLinks = await page.locator('a[href]').evaluateAll(links => links
     .filter(a => a.getClientRects().length && ['ad.search.naver.com','m.ad.search.naver.com'].includes(new URL(a.href).hostname))
@@ -109,10 +110,10 @@ try {
         if (pageIndex===4) {moreStatus='limit_reached';break;}
         moreUrl=next;
       }
-    } catch(error) { if(error.message==='Search HTTP 403')throw error; moreStatus='unknown'; result={status:'unknown',rank:null,adId:null}; source=null; }
+    } catch(error) { if(error.message==='Search HTTP 403')throw error; moreError=error.message; moreStatus='unknown'; result={status:'unknown',rank:null,adId:null}; source=null; }
   }
   console.log(JSON.stringify({keyword,expectedHost,device,observedAt:new Date().toISOString(),...result,
-    source,mainRank,moreRank,mainObservedCount:ads.length,moreObservedCount,morePages,moreStatus,
+    source,mainRank,moreRank,mainObservedCount:ads.length,moreObservedCount,morePages,moreStatus,moreError,
     observedCount:source==='MORE'||morePages>0?moreObservedCount:ads.length,ads:observedAds,
     note:'Read-only observation from this VPS. More ranks are separate from main search ranks. No ad clicks or bid changes.'},null,2));
 } catch (error) {
