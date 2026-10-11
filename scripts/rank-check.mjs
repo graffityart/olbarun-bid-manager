@@ -92,13 +92,16 @@ try {
             if(pageIndex===4){moreStatus='limit_reached';break;}
             const before=collected.length;
             let denied=false;
-            const checkResponse=response=>{if(response.status()===403)denied=true;};
-            page.on('response',checkResponse);
+            const loadDiagnostics=[];
+            const failed=request=>loadDiagnostics.push('request failed: '+(request.failure()?.errorText??'unknown'));
+            const scriptError=error=>loadDiagnostics.push('script: '+error.message.slice(0,180));
+            const checkResponse=response=>{if(response.status()===403)denied=true;if(response.status()>=400)loadDiagnostics.push('HTTP '+response.status());};
+            page.on('response',checkResponse);page.on('requestfailed',failed);page.on('pageerror',scriptError);
             try{
               await loadMore.click({timeout:Math.min(5000,Math.max(1,deadline-Date.now()))});
-              await page.waitForFunction(({selector,before})=>document.querySelectorAll(selector).length>before,{selector:moreSelector,before},{timeout:Math.min(10000,Math.max(1,deadline-Date.now()))});
-            }catch(error){if(denied)throw Error('Search HTTP 403');throw error;}
-            finally{page.off('response',checkResponse);}
+              await page.waitForFunction(({selector,before})=>document.querySelectorAll(selector).length>before,{selector:moreSelector,before},{timeout:Math.min(20000,Math.max(1,deadline-Date.now()))});
+            }catch(error){if(denied)throw Error('Search HTTP 403');throw Error(error.message+'; more-load diagnostics: '+(loadDiagnostics.slice(-5).join(' | ')||'no HTTP/network/script error observed'));}
+            finally{page.off('response',checkResponse);page.off('requestfailed',failed);page.off('pageerror',scriptError);}
             if(denied)throw Error('Search HTTP 403');
             appended=true;
             continue;
