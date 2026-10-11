@@ -10,9 +10,10 @@ if (!keyword?.trim() || !expectedHost || !['PC', 'MOBILE'].includes(device)) {
 }
 const browser = await chromium.launch({ headless: true });
 try {
-  let page = await browser.newPage(device === 'MOBILE'
+  const context = await browser.newContext(device === 'MOBILE'
     ? { ...devices['iPhone 13'], locale: 'ko-KR' }
     : { locale: 'ko-KR', viewport: { width: 1365, height: 900 } });
+  let page = await context.newPage();
   const url = new URL(device === 'MOBILE'
     ? 'https://m.search.naver.com/search.naver' : 'https://search.naver.com/search.naver');
   url.searchParams.set('query', keyword);
