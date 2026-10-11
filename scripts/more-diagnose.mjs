@@ -27,10 +27,15 @@ try{
    const button=page.locator('#_get_more');
    const before=await ads.count();
    const metadata=await button.evaluate(el=>({total:el.getAttribute('data-total'),pageSize:el.getAttribute('data-page-size'),hasReference:!!new URL(el.getAttribute('data-more-ads-url'),location.href).searchParams.get('referenceId')}));
-   events.push({kind:'TAP_START'});
+   await button.scrollIntoViewIfNeeded();
+   const hit=await button.evaluate(el=>{const r=el.getBoundingClientRect();const top=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {button:{x:r.x,y:r.y,width:r.width,height:r.height},top:top?{tag:top.tagName,id:top.id,class:top.className}:null,buttonContainsTop:!!top&&el.contains(top)};});
+   await page.evaluate(()=>{window.__moreInputs=[];for(const type of ['pointerdown','pointerup','touchstart','touchend','click'])document.addEventListener(type,e=>{const el=e.target;window.__moreInputs.push({type,tag:el?.tagName,id:el?.id,class:typeof el?.className==='string'?el.className:null,trusted:e.isTrusted});},true);});
+   const screenshot='/tmp/olbarun-more-'+mode.toLowerCase()+'.png';
+   await page.screenshot({path:screenshot});
+   events.push({kind:'TAP_START',hit,screenshot});
    await button.tap({timeout:5000});
    await page.waitForFunction(n=>document.querySelectorAll('a.txt_link[onclick*="sct.title"]').length>n,before,{timeout:10000}).catch(()=>{});
-   console.log(JSON.stringify({mode,keyword,before,after:await ads.count(),metadata,events},null,2));
+   console.log(JSON.stringify({mode,keyword,before,after:await ads.count(),metadata,inputs:await page.evaluate(()=>window.__moreInputs),events},null,2));
   }catch(e){console.log(JSON.stringify({mode,error:e.message,events},null,2));if(/HTTP 403|HTTP 429/.test(e.message))break;}
   finally{await context.close();}
  }
