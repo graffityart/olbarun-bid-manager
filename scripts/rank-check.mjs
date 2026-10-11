@@ -95,7 +95,7 @@ try {
             const loadDiagnostics=[];
             const failed=request=>loadDiagnostics.push('request failed: '+(request.failure()?.errorText??'unknown'));
             const scriptError=error=>loadDiagnostics.push('script: '+error.message.slice(0,180));
-            const checkResponse=response=>{if(response.status()===403)denied=true;if(response.status()>=400)loadDiagnostics.push('HTTP '+response.status());};
+            const checkResponse=response=>{if(response.status()===403)denied=true;if(response.status()>=400){const u=new URL(response.url());loadDiagnostics.push('HTTP '+response.status()+' '+response.request().resourceType()+' '+u.origin+u.pathname);}};
             page.on('response',checkResponse);page.on('requestfailed',failed);page.on('pageerror',scriptError);
             try{
               await loadMore.click({timeout:Math.min(5000,Math.max(1,deadline-Date.now()))});
