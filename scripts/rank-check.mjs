@@ -87,6 +87,8 @@ try {
         if (found.status==='unknown') throw Error('Multiple matching ads');
         if (found.status==='visible') {result=found;source='MORE';moreRank=found.rank;observedAds=collected;break;}
         if(device==='MOBILE'){
+          // Complete initial script loading before using the dynamic More control.
+          await page.waitForLoadState('load',{timeout:Math.min(10000,Math.max(1,deadline-Date.now()))});
           const loadMore=page.locator('a#_get_more');
           if(await loadMore.count() && await loadMore.isVisible()){
             if(pageIndex===4){moreStatus='limit_reached';break;}
