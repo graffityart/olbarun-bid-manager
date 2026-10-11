@@ -104,6 +104,8 @@ try {
             const checkResponse=response=>{if(response.status()===403)denied=true;if(response.status()>=400){const u=new URL(response.url());loadDiagnostics.push('HTTP '+response.status()+' '+response.request().resourceType()+' '+u.origin+u.pathname);}};
             page.on('response',checkResponse);page.on('requestfailed',failed);page.on('pageerror',scriptError);
             try{
+              await loadMore.scrollIntoViewIfNeeded({timeout:Math.min(5000,Math.max(1,deadline-Date.now()))});
+              await page.waitForTimeout(500);
               await loadMore.tap({timeout:Math.min(5000,Math.max(1,deadline-Date.now()))});
               await page.waitForFunction(({selector,before})=>document.querySelectorAll(selector).length>before,{selector:moreSelector,before},{timeout:Math.min(20000,Math.max(1,deadline-Date.now()))});
             }catch(error){if(denied)throw Error('Search HTTP 403');throw Error(error.message+'; more-load diagnostics: '+(loadDiagnostics.slice(-5).join(' | ')||'no HTTP/network/script error observed'));}
