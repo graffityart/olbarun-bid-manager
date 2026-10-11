@@ -10,7 +10,7 @@ if (!keyword?.trim() || !expectedHost || !['PC', 'MOBILE'].includes(device)) {
 }
 const browser = await chromium.launch({ headless: true });
 try {
-  const page = await browser.newPage(device === 'MOBILE'
+  let page = await browser.newPage(device === 'MOBILE'
     ? { ...devices['iPhone 13'], locale: 'ko-KR' }
     : { locale: 'ko-KR', viewport: { width: 1365, height: 900 } });
   const url = new URL(device === 'MOBILE'
@@ -52,6 +52,9 @@ try {
   }
   const deadline = Date.now() + 45000;
   if (valid && result.status === 'not_in_observed_list' && moreUrl) {
+    // Match the standalone successful mobile test: a fresh tab in the same context.
+    if(device==='MOBILE'){const mainPage=page;page=await mainPage.context().newPage();await mainPage.close();}
+
     const collected = [];
     let appended = false;
     try {
