@@ -1,3 +1,4 @@
+import {resumeSignature,resumeCheckpoint,publicJob} from "@/lib/resume-job";
 import {makeAutoJob,activeAutoStates} from "@/lib/auto-job";
 import {assertGroupSelection,groupKey,autoJobKey} from "@/lib/group-scope";
 import {siteForGroup,siteForRow,normalizeAdHost} from "@/lib/ad-sites";
@@ -15,7 +16,7 @@ async function naverRequest(method:string,path:string,body?:unknown,supplied?:Cr
  const r=await fetch(`https://api.searchad.naver.com${path}`,{method,headers:{"Content-Type":"application/json","X-Timestamp":ts,"X-API-KEY":e.NAVER_API_KEY,"X-Customer":e.NAVER_CUSTOMER_ID,"X-Signature":signature},...(body?{body:JSON.stringify(body)}:{})});
  if(!r.ok)throw new Error(`네이버 API 요청 실패 (${r.status}). 연결 정보와 권한을 확인하세요.`);return r.json() as Promise<any>;
 }
-export async function GET(){try{const row=await db().prepare("SELECT data FROM bid_states WHERE id = ?").bind("main").first();const logs=await db().prepare("SELECT data FROM bid_logs ORDER BY created DESC LIMIT 100").all();const ranks=await db().prepare("SELECT data FROM bid_states WHERE id LIKE 'rank:%'").all();const worker=await db().prepare("SELECT data FROM bid_states WHERE id=?").bind("rank-worker").first();const auto=await db().prepare("SELECT data FROM bid_states WHERE id=?").bind("auto").first();const autoWorker=await db().prepare("SELECT data FROM bid_states WHERE id=?").bind("auto-worker").first();const jobs=await db().prepare("SELECT data FROM bid_states WHERE id LIKE 'auto-job:%'").all();return Response.json({jobs:jobs.results.map((r:any)=>JSON.parse(r.data)),auto:auto?JSON.parse(auto.data):null,autoWorker:autoWorker?JSON.parse(autoWorker.data):null,ranks:ranks.results.map((r:any)=>JSON.parse(r.data)),worker:worker?JSON.parse(worker.data):null,connected:await credentials().then(Boolean).catch(()=>false),state:row?JSON.parse(row.data):null,logs:logs.results.map((r:any)=>JSON.parse(r.data))})}catch(err){return Response.json({error:(err as Error).message},{status:503})}}
+export async function GET(){try{const row=await db().prepare("SELECT data FROM bid_states WHERE id = ?").bind("main").first();const logs=await db().prepare("SELECT data FROM bid_logs ORDER BY created DESC LIMIT 100").all();const ranks=await db().prepare("SELECT data FROM bid_states WHERE id LIKE 'rank:%'").all();const worker=await db().prepare("SELECT data FROM bid_states WHERE id=?").bind("rank-worker").first();const auto=await db().prepare("SELECT (data::jsonb #- '{checkpoint,observations}' - 'resumeSignature')::text AS data FROM bid_states WHERE id=?").bind("auto").first();const autoWorker=await db().prepare("SELECT data FROM bid_states WHERE id=?").bind("auto-worker").first();const jobs=await db().prepare("SELECT (data::jsonb #- '{checkpoint,observations}' - 'resumeSignature')::text AS data FROM bid_states WHERE id LIKE 'auto-job:%'").all();return Response.json({jobs:jobs.results.map((r:any)=>publicJob(JSON.parse(r.data))),auto:auto?publicJob(JSON.parse(auto.data)):null,autoWorker:autoWorker?JSON.parse(autoWorker.data):null,ranks:ranks.results.map((r:any)=>JSON.parse(r.data)),worker:worker?JSON.parse(worker.data):null,connected:await credentials().then(Boolean).catch(()=>false),state:row?JSON.parse(row.data):null,logs:logs.results.map((r:any)=>JSON.parse(r.data))})}catch(err){return Response.json({error:(err as Error).message},{status:503})}}
 export async function POST(req:Request){try{return await withManagementLock(async transaction=>{const db=()=>transaction;const naver=async(method:string,path:string,body?:unknown,supplied?:Credentials)=>naverRequest(method,path,body,supplied??await credentials(db)??undefined);
  const origin=req.headers.get("origin");if(origin&&new URL(origin).host!==req.headers.get("host"))return Response.json({error:"다른 사이트에서 보낸 요청은 허용되지 않습니다."},{status:403});
  const b=await req.json() as any;
@@ -29,7 +30,16 @@ export async function POST(req:Request){try{return await withManagementLock(asyn
  if(w.strategy!=="cost")throw Error("VPS 코드를 업데이트하고 작업기를 재시작하세요. 자동 절감 기능 준비가 필요합니다.");
  if(!await credentials(db))throw Error("네이버 연결 정보를 먼저 저장하세요.");
  const savedState=saved?JSON.parse(saved.data):null;
- const job={...makeAutoJob(savedState,Array.isArray(b.rows)?b.rows.map((r:any)=>r.id):[],b.device,b.waitSeconds,crypto.randomUUID()),group:b.group,groupName:savedState.rows.find((r:any)=>groupKey(r)===b.group)?.group,lowestRank:b.lowestRank??null,strategy:b.lowestRank===null?"increase":"cost"};
+ let job:any={...makeAutoJob(savedState,Array.isArray(b.rows)?b.rows.map((r:any)=>r.id):[],b.device,b.waitSeconds,crypto.randomUUID()),group:b.group,groupName:savedState.rows.find((r:any)=>groupKey(r)===b.group)?.group,lowestRank:b.lowestRank??null,strategy:b.lowestRank===null?"increase":"cost"};
+ const priorRow=await db().prepare("SELECT data FROM bid_states WHERE id=?").bind(autoJobKey(b.group)).first();const prior=priorRow?JSON.parse(priorRow.data):null;
+ if(b.startMode!==undefined&&!['restart','resume'].includes(b.startMode))throw Error('실행 방식을 확인하세요.');
+ if(b.startMode==='resume'){
+  if(!w.resumeMode)throw Error('이어서 실행하려면 VPS 코드를 업데이트하고 재시작하세요.');
+  if(prior?.jobId!==b.previousJobId)throw Error('작업 상태가 변경되었습니다. 새로고침 후 다시 선택하세요.');
+  const records=await db().prepare("SELECT data FROM bid_states WHERE id LIKE 'bid-attempt:%' AND data::jsonb->>'jobId'=?").bind(prior.jobId).all();
+  const signature=resumeSignature(savedState.rows,job);const checkpoint=resumeCheckpoint(prior,signature,records.results.map((r:any)=>JSON.parse(r.data)));
+  job={...job,startMode:'resume',checkpoint,resumeSignature:signature,cycle:prior.cycle??0,completed:checkpoint.nextObserve,total:job.ids.length,nextCycleAt:prior.nextCycleAt??null,resumedFrom:prior.jobId};
+ }else job={...job,startMode:'restart',resumeSignature:resumeSignature(savedState.rows,job)};
  assertGroupSelection(savedState.rows,job.ids,b.group);
  if(b.lowestRank!==undefined&&b.lowestRank!==null&&(!Number.isInteger(b.lowestRank)||b.lowestRank<1||b.lowestRank>5||job.ids.some((id:string)=>savedState.rows.find((r:any)=>r.id===id)?.target!==b.lowestRank)))throw Error("최저가 순위와 키워드 목표 순위를 확인하세요.");
  if(b.lowestRank!==undefined&&!w.lowestMode)throw Error("최저가 모드 사용을 위해 VPS 코드를 업데이트하고 재시작하세요.");
@@ -37,7 +47,7 @@ export async function POST(req:Request){try{return await withManagementLock(asyn
  const active=existingJobs.results.map((r:any)=>JSON.parse(r.data)).filter((j:any)=>activeAutoStates.includes(j.state));
  if(active.some((j:any)=>j.ids?.some((id:string)=>job.ids.includes(id))))throw Error("이 광고그룹의 키워드는 이미 실행 중입니다. PC와 모바일에서 같은 키워드를 중복 실행할 수 없습니다.");
  const result=await db().prepare("INSERT INTO bid_states(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE bid_states.data::jsonb->>'state' NOT IN ('queued','running','stop_requested')").bind(autoJobKey(b.group),JSON.stringify(job)).run();
- if(!result.rowCount)throw Error("이미 실행 중입니다. 중지 후 다시 실행하세요.");return Response.json({...job,message:"실행 요청을 저장했습니다. VPS에서 전체 순위 조회를 시작합니다."});}
+ if(!result.rowCount)throw Error("이미 실행 중입니다. 중지 후 다시 실행하세요.");return Response.json({...publicJob(job),message:"실행 요청을 저장했습니다. VPS에서 전체 순위 조회를 시작합니다."});}
  if(b.action==="auto-stop"){
  const key=autoJobKey(String(b.group??''));
  await db().prepare("UPDATE bid_states SET data=(data::jsonb || '{\"state\":\"stop_requested\",\"message\":\"중지 요청 확인 중\"}'::jsonb)::text WHERE (id=? OR (id='auto' AND data::jsonb->>'group'=?)) AND data::jsonb->>'state' IN ('queued','running')").bind(key,b.group).run();return Response.json({state:"stop_requested",message:"선택한 광고그룹의 중지를 요청했습니다. 다른 그룹은 계속 실행됩니다."});}

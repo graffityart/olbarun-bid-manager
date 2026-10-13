@@ -10,6 +10,7 @@ import {decryptCredentials} from '../lib/credentials.ts';
 import {siteForRow} from '../lib/ad-sites.ts';
 import {runRotation} from '../lib/rotation.ts';
 import {costDecision,costApplied} from '../lib/cost-policy.ts';
+import {resumeSignature} from '../lib/resume-job.ts';
 import {serialWork,searchDelay} from '../lib/shared-work.ts';
 import {groupKey,assertGroupSelection} from '../lib/group-scope.ts';
 import {makeAutoJob} from '../lib/auto-job.ts';
@@ -21,10 +22,10 @@ const run=promisify(execFile), checker=fileURLToPath(new URL('./rank-check.mjs',
 let shutdown=false;
 process.on('SIGINT',()=>{shutdown=true});process.on('SIGTERM',()=>{shutdown=true});
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const load=async id=>{const r=await db.query('SELECT data FROM bid_states WHERE id=$1',[id]);return r.rows[0]?JSON.parse(r.rows[0].data):null};
+const load=async id=>{const r=await db.query("SELECT (CASE WHEN id='auto' OR id LIKE 'auto-job:%' THEN data::jsonb #- '{checkpoint,observations}' ELSE data::jsonb END)::text AS data FROM bid_states WHERE id=$1",[id]);return r.rows[0]?JSON.parse(r.rows[0].data):null};
 const save=(id,value)=>db.query('INSERT INTO bid_states(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=excluded.data',[id,JSON.stringify(value)]);
 const work=serialWork();let lastSearchStarted=0;
-const heartbeat=()=>save('auto-worker',{multiGroup:true,lowestMode:true,strategy:'cost',state:shutdown?'stopping':'online',updatedAt:new Date().toISOString()});
+const heartbeat=()=>save('auto-worker',{resumeMode:true,multiGroup:true,lowestMode:true,strategy:'cost',state:shutdown?'stopping':'online',updatedAt:new Date().toISOString()});
 async function request(c,method,path,body){
  const ts=String(Date.now()), signature=createHmac('sha256',c.NAVER_SECRET_KEY).update(`${ts}.${method}.${path.split('?')[0]}`).digest('base64');
  const res=await fetch('https://api.searchad.naver.com'+path,{method,signal:AbortSignal.timeout(20000),headers:{'Content-Type':'application/json','X-Timestamp':ts,'X-API-KEY':c.NAVER_API_KEY,'X-Customer':c.NAVER_CUSTOMER_ID,'X-Signature':signature},...(body?{body:JSON.stringify(body)}:{})});
@@ -41,14 +42,16 @@ async function execute(job,key){
   if(!raw.rows.length)throw Error('저장된 네이버 연결 정보가 없습니다.');
   stage='연결 정보 복호화';
   const c=decryptCredentials(raw.rows[0].data);
-  let cycle=0;
+  let cycle=job.startMode==='resume'?(job.cycle??0):0;let resume=job.startMode==='resume'?job.checkpoint:null;
+  if(resume?.phase==='complete'){resume=null;while(job.nextCycleAt>Date.now()&&!await stopped())await sleep(Math.min(5000,job.nextCycleAt-Date.now()));}
   while(!await stopped()){
    const state=await load('main');makeAutoJob(state,job.ids,job.device,job.waitSeconds,job.jobId);assertGroupSelection(state.rows,job.ids,job.group);
    const rows=job.ids.map(id=>state.rows.find(r=>r.id===id));
    const byId=new Map(rows.map(r=>[r.id,r]));
-   let completed=0; cycle++;
-   await update({cycle,completed:0,total:rows.length,message:'전체 순위 조회'});
+   let completed=resume?.nextObserve??0;if(!resume)cycle++;
+   await update({cycle,completed,total:rows.length,message:resume?'중지 지점에서 이어서 처리':'전체 순위 조회',nextCycleAt:null});
    const ports={
+    resume:resume??undefined,checkpoint:async checkpoint=>{await db.query("UPDATE bid_states SET data=(data::jsonb || $1::jsonb)::text WHERE id=$3 AND data::jsonb->>'jobId'=$2 AND data::jsonb->>'state' IN ('running','stop_requested')",[JSON.stringify({checkpoint,resumeSignature:resumeSignature(state.rows,job)}),job.jobId,key]);},
     deferReflectionWait:true,now:()=>Date.now(),stopped,wait:async seconds=>{await heartbeat();await sleep(seconds*1000)},
     observe:async row=>{
      const change=await load(`bid-change:${row.id}`),policy=await load(`cost:${job.device}:${row.id}`);
@@ -209,10 +212,10 @@ async function execute(job,key){
      return manage(row,fresh);
     });
    };
-   const result=await runRotation(rows,job.device,job.waitSeconds,ports);
+   const result=await runRotation(rows,job.device,job.waitSeconds,ports);resume=null;
    if(result.stopped)break;
    if(!result.changes){
-    await update({message:'순위 감시 중 · 다음 전체 조회 대기'});
+    await update({message:'순위 감시 중 · 다음 전체 조회 대기',nextCycleAt:Date.now()+job.waitSeconds*1000});
     for(let remaining=job.waitSeconds;remaining>0&&!await stopped();remaining-=5){await heartbeat();await sleep(Math.min(5,remaining)*1000);}
    }
   }
@@ -234,7 +237,7 @@ try{
  const tasks=new Map();
  while(!shutdown){
   await heartbeat();
-  const records=await db.query("SELECT id,data FROM bid_states WHERE id='auto' OR id LIKE 'auto-job:%' ORDER BY id");
+  const records=await db.query("SELECT id,(CASE WHEN data::jsonb->>'state'='queued' THEN data::jsonb ELSE data::jsonb #- '{checkpoint,observations}' END)::text AS data FROM bid_states WHERE id='auto' OR id LIKE 'auto-job:%' ORDER BY id");
   for(const record of records.rows){
    const job=JSON.parse(record.data),key=record.id;
    if(job.state==='queued'&&!tasks.has(key)){
