@@ -60,7 +60,7 @@ async function execute(job){
      const queryStartedAt=Date.now();
      await heartbeat();const r=byId.get(row.id),host=siteForGroup(r.group);let observation;
      const query=async()=>{
-      try{const {stdout}=await run(process.execPath,[checker,r.keyword,host,job.device],{timeout:75000,maxBuffer:1024*1024});return stdout;}
+      try{const {stdout}=await run(process.execPath,[checker,r.keyword,host,job.device],{timeout:120000,maxBuffer:1024*1024});return stdout;}
       catch(error){if(searchAccessDenied(String(error.stdout??'')))return String(error.stdout);return '';}
      };
      let output=await query();

@@ -51,7 +51,7 @@ try {
     const u = new URL('https://ad.search.naver.com/search.naver');
     u.searchParams.set('query', keyword); moreUrl = u.href;
   }
-  const deadline = Date.now() + 45000;
+  const deadline = Date.now() + 90000;
   if (valid && result.status === 'not_in_observed_list' && moreUrl) {
     // Match the standalone successful mobile test: a fresh tab in the same context.
     if(device==='MOBILE'){const mainPage=page;page=await mainPage.context().newPage();await mainPage.close();}
@@ -59,7 +59,7 @@ try {
     const collected = [];
     let appended = false;
     try {
-      for (let pageIndex = 1; pageIndex <= 4; pageIndex++) {
+      for (let pageIndex = 1; pageIndex <= 7; pageIndex++) {
         const remaining = deadline-Date.now();
         if (remaining < 1000) throw Error('More observation time limit');
         const moreResponse = appended ? null : await page.goto(moreUrl, {waitUntil:'domcontentloaded',timeout:Math.min(15000,remaining)});
@@ -87,15 +87,18 @@ try {
         collected.push(...batch);
         if (!validRankList(collected,1,device==='MOBILE')) throw Error('Duplicate more ad IDs');
         morePages=pageIndex; moreObservedCount=collected.length;
-        const found = matchRank(collected,expectedHost); moreStatus=found.status;
+        const found = matchRank(collected.slice(0,100),expectedHost); moreStatus=found.status;
         if (found.status==='unknown') throw Error('Multiple matching ads');
         if (found.status==='visible') {result=found;source='MORE';moreRank=found.rank;observedAds=collected;break;}
+        if(collected.length>=100){moreStatus='limit_reached';break;}
         if(device==='MOBILE'){
           // Complete initial script loading before using the dynamic More control.
           await page.waitForLoadState('load',{timeout:Math.min(10000,Math.max(1,deadline-Date.now()))});
           const loadMore=page.locator('a#_get_more');
           if(await loadMore.count() && await loadMore.isVisible()){
-            if(pageIndex===4){moreStatus='limit_reached';break;}
+            const total=Number(await loadMore.getAttribute('data-total'));
+            if(Number.isInteger(total)&&total>0&&collected.length>=total)break;
+            if(pageIndex===7){moreStatus='limit_reached';break;}
             const before=collected.length;
             let denied=false;
             const loadDiagnostics=[];
@@ -118,7 +121,7 @@ try {
         const nextLinks = await page.locator(device==='PC'?'a.next[href]':'a[href]').evaluateAll(links=>links.filter(a=>a.getClientRects().length).map(a=>a.href));
         const next = nextLinks.map(u=>safeMoreUrl(u,keyword,device,pageIndex+1)).find(Boolean);
         if (!next) break;
-        if (pageIndex===4) {moreStatus='limit_reached';break;}
+        if (pageIndex===7) {moreStatus='limit_reached';break;}
         moreUrl=next;
       }
     } catch(error) { if(error.message==='Search HTTP 403')throw error; moreError=error.message; moreStatus='unknown'; result={status:'unknown',rank:null,adId:null}; source=null; }
