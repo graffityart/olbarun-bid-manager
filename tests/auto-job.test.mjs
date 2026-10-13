@@ -4,9 +4,9 @@ import {makeAutoJob} from '../lib/auto-job.ts';
 import {assertAutoBid,cappedActualBid} from '../lib/auto-bid.ts';
 const row={id:'a',keyword:'부산철거',group:'파워링크#1_광고그룹#1',bid:90,max:100,target:4};
 const state={mode:'live',device:'PC',rows:[row]};
-test('queue uses saved keywords and rejects demo, wrong device, duplicates and unconfigured groups',()=>{
+test('queue uses saved keywords and rejects demo, invalid device, duplicates and unconfigured groups',()=>{
  assert.deepEqual(makeAutoJob(state,['a'],'PC',180,'job').ids,['a']);
- for(const args of [[{...state,mode:'demo'},['a'],'PC',180],[state,['a'],'MOBILE',180],[state,['a','a'],'PC',180],[state,['missing'],'PC',180],[state,['a'],'PC',119],[{...state,rows:[{...row,group:'unknown'}]},['a'],'PC',180]])assert.throws(()=>makeAutoJob(...args,'job'));
+ for(const args of [[{...state,mode:'demo'},['a'],'PC',180],[state,['a'],'INVALID',180],[state,['a','a'],'PC',180],[state,['missing'],'PC',180],[state,['a'],'PC',119],[{...state,rows:[{...row,group:'unknown'}]},['a'],'PC',180]])assert.throws(()=>makeAutoJob(...args,'job'));
 });
 const kw={nccKeywordId:'a',keyword:row.keyword,nccAdgroupId:'g',bidAmt:70,useGroupBidAmt:true,status:'ELIGIBLE',userLock:false};
 const group={nccAdgroupId:'g',name:row.group,adgroupType:'WEB_SITE',bidAmt:90,status:'ELIGIBLE',userLock:false};
@@ -31,3 +31,5 @@ test('fresh actual bid can be the baseline while target and cap remain unchanged
  assertAutoBid({...row,bid:80},row,actual,group,80,90,observation,'PC',now);
  assert.equal(cappedActualBid(row,actual,group),null);
 });
+
+test('each group can use its own device independently of the last UI device',()=>{assert.equal(makeAutoJob(state,['a'],'MOBILE',180,'mobile').device,'MOBILE');});

@@ -21,3 +21,7 @@ export function matchesAdSite(destination: string, expectedHost: string): boolea
   const expected = normalizeAdHost(expectedHost);
   return expected !== null && normalizeAdHost(destination) === expected;
 }
+
+export function siteForRow(row:{group:string;siteHost?:string|null}):string|null {
+ return Object.prototype.hasOwnProperty.call(row,'siteHost')?(row.siteHost?normalizeAdHost(row.siteHost):null):siteForGroup(row.group);
+}

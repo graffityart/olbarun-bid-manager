@@ -13,16 +13,19 @@ if (sample !== null && (!Number.isInteger(sample) || sample < 1 || sample > 20))
 if (!process.env.DATABASE_URL) throw Error('DATABASE_URL is required in .env.worker');
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 1,
   connectionTimeoutMillis: 10000 });
+const client=await pool.connect();
+const lock=await client.query('SELECT pg_try_advisory_lock(704031027) AS locked');
+if(!lock.rows[0].locked){client.release();await pool.end();throw Error('자동입찰 서비스와 동시에 수동 수집기를 실행할 수 없습니다. 서비스 중지 후 사용하세요.');}
 const run = promisify(execFile);
 const checker = fileURLToPath(new URL('./rank-check.mjs', import.meta.url));
 let stop = false;
 process.on('SIGTERM', () => { stop = true; });
 process.on('SIGINT', () => { stop = true; });
-const save = (id, data) => pool.query(
+const save = (id, data) => client.query(
   'INSERT INTO bid_states (id,data) VALUES ($1,$2) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
   [id, JSON.stringify(data)]);
 try {
-  const { rows: states } = await pool.query("SELECT data FROM bid_states WHERE id='main'");
+  const { rows: states } = await client.query("SELECT data FROM bid_states WHERE id='main'");
   if (!states.length) throw Error('Save live keywords in the management screen first');
   const state = JSON.parse(states[0].data);
   if (state.mode !== 'live' || !Array.isArray(state.rows)) throw Error('Live keyword data required');
@@ -38,7 +41,7 @@ try {
   for (const row of rows) {
     if (stop) break;
     const queryStartedAt = Date.now();
-    const host = siteForGroup(row.group);
+    const host = siteForRow(row);
     let result = { status: 'unknown', rank: null, error: 'Unconfigured advertising group' };
     if (host) {
       try {
@@ -68,4 +71,4 @@ try {
 } catch (error) {
   console.error('Collector failed:', error.message.replace(/postgres(?:ql)?:\/\/\S+/g, '[redacted]'));
   process.exitCode = 1;
-} finally { await pool.end(); }
+} finally { await client.query('SELECT pg_advisory_unlock(704031027)').catch(()=>{});client.release();await pool.end(); }
