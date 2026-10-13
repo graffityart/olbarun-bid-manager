@@ -3,6 +3,7 @@ import { normalizeAdHost } from '../lib/ad-sites.ts';
 import { mobileMoreBatch,validRankList, matchRank, safeMoreUrl } from '../lib/rank-observation.ts';
 
 const [keyword, rawHost, device = 'PC'] = process.argv.slice(2);
+const capture=process.argv.includes('--capture'),capturePaths=[];
 const expectedHost = rawHost && normalizeAdHost(rawHost);
 if (!keyword?.trim() || !expectedHost || !['PC', 'MOBILE'].includes(device)) {
   console.error('Usage: node scripts/rank-check.mjs "keyword" domain PC|MOBILE');
@@ -22,6 +23,7 @@ try {
   const selector = device === 'PC' ? '#power_link_body > ul.lst_type > li.lst a.lnk_head'
     : 'a.txt_link[onclick*="a=pwl.tit&"]';
   await page.locator(selector).first().waitFor({ state: 'visible', timeout: 5000 });
+  if(capture){const path='/tmp/olbarun-rank-'+device.toLowerCase()+'-main.png';await page.screenshot({path,fullPage:true});capturePaths.push(path);}
   const ads = await page.locator(selector).evaluateAll((links, isMobile) => links
     .filter(link => link.getClientRects().length > 0)
     .map(link => {
@@ -68,6 +70,7 @@ try {
         if ((!appended && moreResponse?.status() !== 200) || !safeMoreUrl(page.url(),keyword,device,appended?1:pageIndex)) throw Error('More page identity changed');
         const moreSelector = device === 'PC' ? '.ad_section.section > ol.lst_type > li.lst' : 'a.txt_link[onclick*="sct.title"]';
         await page.locator(moreSelector).first().waitFor({state:'visible',timeout:Math.min(5000,Math.max(1,deadline-Date.now()))});
+        if(capture){const path='/tmp/olbarun-rank-'+device.toLowerCase()+'-more-'+pageIndex+'.png';await page.screenshot({path,fullPage:true});capturePaths.push(path);}
         let batch = await page.locator(moreSelector).evaluateAll((items, mobile) => items.filter(el=>el.getClientRects().length).map(el=>{
           const link = mobile ? el : el.querySelector('a.favicon_wrap');
           const title = mobile ? el : el.querySelector('a.tit_wrap');
@@ -131,7 +134,7 @@ try {
     } catch(error) { if(error.message==='Search HTTP 403')throw error; moreError=error.message; moreStatus='unknown'; result={status:'unknown',rank:null,adId:null}; source=null; }
   }
   console.log(JSON.stringify({keyword,expectedHost,device,observedAt:new Date().toISOString(),...result,
-    source,mainRank,moreRank,mainObservedCount:ads.length,moreObservedCount,morePages,moreStatus,moreError,
+    capturePaths,source,mainRank,moreRank,mainObservedCount:ads.length,moreObservedCount,morePages,moreStatus,moreError,
     observedCount:source==='MORE'||morePages>0?moreObservedCount:ads.length,ads:observedAds,
     note:'Read-only observation from this VPS. More ranks are separate from main search ranks. No ad clicks or bid changes.'},null,2));
 } catch (error) {
