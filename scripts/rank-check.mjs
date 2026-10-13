@@ -51,13 +51,14 @@ try {
     const u = new URL('https://ad.search.naver.com/search.naver');
     u.searchParams.set('query', keyword); moreUrl = u.href;
   }
-  const deadline = Date.now() + 90000;
+  const deadline = Date.now() + 150000;
   if (valid && result.status === 'not_in_observed_list' && moreUrl) {
     // Match the standalone successful mobile test: a fresh tab in the same context.
     if(device==='MOBILE'){const mainPage=page;page=await mainPage.context().newPage();await mainPage.close();}
 
     const collected = [];
     let appended = false;
+    let nextExpansionAt=0;
     try {
       for (let pageIndex = 1; pageIndex <= 7; pageIndex++) {
         const remaining = deadline-Date.now();
@@ -107,9 +108,12 @@ try {
             const checkResponse=response=>{if(response.status()===403)denied=true;if(response.status()>=400){const u=new URL(response.url());loadDiagnostics.push('HTTP '+response.status()+' '+response.request().resourceType()+' '+u.origin+u.pathname);}};
             page.on('response',checkResponse);page.on('requestfailed',failed);page.on('pageerror',scriptError);
             try{
+              const pause=Math.max(0,nextExpansionAt-Date.now());
+              if(pause>0){if(Date.now()+pause>=deadline)throw Error('More observation time limit');await page.waitForTimeout(pause);}
               await loadMore.scrollIntoViewIfNeeded({timeout:Math.min(5000,Math.max(1,deadline-Date.now()))});
               await page.waitForTimeout(500);
               await loadMore.tap({timeout:Math.min(5000,Math.max(1,deadline-Date.now()))});
+              nextExpansionAt=Date.now()+15000;
               await page.waitForFunction(({selector,before})=>document.querySelectorAll(selector).length>before,{selector:moreSelector,before},{timeout:Math.min(20000,Math.max(1,deadline-Date.now()))});
             }catch(error){if(denied)throw Error('Search HTTP 403');throw Error(error.message+'; more-load diagnostics: '+(loadDiagnostics.slice(-5).join(' | ')||'no HTTP/network/script error observed'));}
             finally{page.off('response',checkResponse);page.off('requestfailed',failed);page.off('pageerror',scriptError);}

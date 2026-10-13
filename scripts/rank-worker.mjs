@@ -43,7 +43,7 @@ try {
     if (host) {
       try {
         const { stdout } = await run(process.execPath, [checker, row.keyword, host, state.device],
-          { timeout: 120000, maxBuffer: 1024 * 1024 });
+          { timeout: 180000, maxBuffer: 1024 * 1024 });
         result = JSON.parse(stdout);
         if (result.device !== state.device || result.keyword !== row.keyword
           || result.expectedHost !== host) throw Error('Observation identity mismatch');
