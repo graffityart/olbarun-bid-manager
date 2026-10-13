@@ -17,16 +17,17 @@ export function costDecision(input:{bid:number;min:number;max:number;target:numb
  if(x.observedAt<s.changedAt+x.waitSeconds*1000) return hold('입찰 반영 확인 대기');
  if(x.observedAt<=s.lastObservation) return hold('새 순위 조회 대기');
  s.lastObservation=x.observedAt;
+ const outside=x.source!=='MAIN'||x.rank!>x.target;
  if(s.pending){
-  if(x.rank!>x.target){
+  if(outside){
    s.failedBid=s.pending.after;const next=s.pending.before;
    if(next>x.max) return hold('복구 금액이 최대 입찰가 초과');
    return {action:'restore' as CostAction,next,state:s,reason:'감액 후 목표 이탈 · 이전 금액 복구'};
   }
   s.goodBid=x.bid;s.pending=undefined;s.stable=x.stableChecks?0:3;
  }
- if(x.rank!>x.target){s.stable=0;s.goodBid=undefined;s.failedBid=undefined;
-  return x.bid+10>x.max?hold('최대 입찰가 · 금액 유지'):{action:'increase' as CostAction,next:x.bid+10,state:s,reason:'목표 밖 · 10원 증액'};
+ if(outside){s.stable=0;s.goodBid=undefined;s.failedBid=undefined;
+  return x.bid+10>x.max?hold('최대 입찰가 · 금액 유지'):{action:'increase' as CostAction,next:x.bid+10,state:s,reason:x.source==='MORE'?'상단 미노출 · 더보기 확인 · 10원 증액':'상단 목표 밖 · 10원 증액'};
  }
  s.goodBid=x.bid;s.stable++;
  const checks=x.stableChecks??3;

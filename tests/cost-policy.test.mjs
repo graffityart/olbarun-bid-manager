@@ -28,7 +28,7 @@ test('failed boundary uses ten-won precision after cooldown',()=>{
 test('unknown ranks and source changes cannot count toward stable reduction',()=>{
  const s=stable().state;
  assert.equal(choose(s,{rank:null,observedAt:base.now+600000,now:base.now+600000}).state.stable,0);
- const change=choose(s,{source:'MORE',observedAt:base.now+600000,now:base.now+600000});assert.equal(change.action,'hold');assert.equal(change.state.stable,1);
+ const change=choose(s,{source:'MORE',observedAt:base.now+600000,now:base.now+600000});assert.equal(change.action,'increase');assert.equal(change.state.stable,0);
 });
 test('uncertain or externally changed amount stays blocked across source switches and restarts',()=>{
  const d=stable(),s=costApplied(d.state,'reduce',900,810,base.now);
@@ -44,6 +44,9 @@ test('write guard rejects wrong direction, source, pause, changed target and cap
  const group={nccAdgroupId:'g',name:'own',adgroupType:'WEB_SITE',status:'ELIGIBLE',userLock:false};
  const obs={status:'visible',source:'MAIN',device:'PC',rank:1,observedAt:new Date(base.now).toISOString()};
  assert.doesNotThrow(()=>assertCostBid(row,row,kw,group,900,810,obs,'PC',base.now,'reduce'));
+ assert.throws(()=>assertCostBid(row,row,kw,group,900,810,{...obs,source:'MORE'},'PC',base.now,'reduce'));
+ assert.doesNotThrow(()=>assertCostBid(row,row,kw,group,900,910,{...obs,source:'MORE'},'PC',base.now,'increase'));
+ assert.throws(()=>assertCostBid(row,row,kw,group,900,910,obs,'PC',base.now,'increase'));
  for(const [r,k,o,next] of [[row,kw,{...obs,source:'invalid'},810],[row,{...kw,userLock:true},obs,810],[{...row,target:2},kw,obs,810],[row,kw,obs,940],[row,kw,{...obs,rank:2},810]])assert.throws(()=>assertCostBid(r,row,k,group,900,next,o,'PC',base.now,'reduce'));
  assert.doesNotThrow(()=>assertCostBid({...row,bid:810},row,{...kw,bidAmt:810},group,810,900,{...obs,rank:2},'PC',base.now,'restore'));
 });
@@ -81,3 +84,9 @@ test('lowest mode requires five exact-rank observations and reduces by the confi
  const mismatch=choose(s,{rank:2,target:3,stableChecks:5,exactRank:true,reductionAmount:20,now:base.now+1000000,observedAt:base.now+1000000});assert.equal(mismatch.action,'hold');assert.equal(mismatch.state.stable,0);
 });
 test('invalid reduction units never change bids',()=>{for(const unit of [0,15,110])assert.equal(choose(stable().state,{reductionAmount:unit}).action,'hold');});
+
+test('More rank inside target never satisfies main-search target',()=>{
+ for(const rank of [1,2,3,25]){const d=choose(null,{target:3,rank,source:'MORE'});assert.equal(d.action,'increase');assert.equal(d.next,910);assert.equal(d.state.stable,0);}
+ assert.equal(choose(null,{target:3,rank:3,source:'MAIN'}).action,'hold');
+ assert.equal(choose(null,{target:3,rank:3,source:'MORE',bid:930}).action,'hold');
+});
