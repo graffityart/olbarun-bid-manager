@@ -126,7 +126,7 @@ async function execute(job,key){
       await update({message:r.keyword+' · 실제 금액 갱신 · 다음 조회 후 판단'});
       return {changed:false,status:'monitoring',bid:actual};
      }
-     const decision=costDecision({bid:actual,min:r.min??70,max:r.max,target:r.target,rank:fresh.rank,source:observation?.source??null,device:job.device,group:groupKey(r),observedAt:fresh.observedAt,now:Date.now(),waitSeconds:job.waitSeconds,stableChecks:job.lowestRank?5:undefined,exactRank:!!job.lowestRank,reductionAmount:job.lowestRank?(r.step??10):undefined},previous);
+     const decision=costDecision({bid:actual,min:r.min??70,max:r.max,target:r.target,rank:fresh.rank,source:observation?.source??null,device:job.device,group:groupKey(r),observedAt:fresh.observedAt,now:Date.now(),waitSeconds:job.waitSeconds,stableChecks:2,exactRank:!!job.lowestRank,reductionAmount:10},previous);
      if(decision.action==='hold'||(job.strategy!=='cost'&&decision.action==='reduce')){await display(decision.state,job.strategy!=='cost'&&decision.action==='reduce'?'목표 이내 · 금액 유지':decision.reason);return {changed:false,status:'monitoring',bid:actual};}
      if(observation?.source==='MORE'){
       const creatives=await request(c,'GET',`/ncc/ads?nccAdgroupId=${encodeURIComponent(kw.nccAdgroupId)}`);
@@ -146,7 +146,7 @@ async function execute(job,key){
      const confirmed=await request(c,'GET',`/ncc/keywords/${encodeURIComponent(id)}`);
      if(confirmed.bidAmt!==decision.next||confirmed.useGroupBidAmt)throw Error('Settings changed');
      const applied=costApplied(decision.state,decision.action,actual,decision.next,Date.now());
-     await display(applied,decision.action==='reduce'?'감액 시험 · 반영 확인 대기':decision.action==='restore'?'이전 금액 복구 · 순위 재확인':'10원 증액 · 반영 확인 대기');
+     await display(applied,decision.action==='reduce'?'감액 시험 · 반영 확인 대기':decision.action==='restore'?'이전 금액 복구 · 순위 재확인':'50원 증액 · 반영 확인 대기');
      await db.query("UPDATE bid_states SET data=jsonb_set(data::jsonb,ARRAY['rows',x.idx::text,'bid'],$1::jsonb)::text FROM (SELECT (ordinality-1) idx FROM bid_states,jsonb_array_elements(data::jsonb->'rows') WITH ORDINALITY e WHERE id='main' AND e.value->>'id'=$2) x WHERE bid_states.id='main'",[JSON.stringify(decision.next),id]);
      const log={group:job.group,groupName:r.group,campaignName:r.campaignName,keyword:r.keyword,keywordId:id,before:actual,after:decision.next,time:new Date().toISOString(),kind:decision.action==='reduce'?'자동감액':decision.action==='restore'?'순위복구':'자동입찰',device:job.device,source:observation.source,jobId:job.jobId};
      await db.query('INSERT INTO bid_logs(id,data,created) VALUES($1,$2,$3)',[attempt.id,JSON.stringify(log),log.time]);
