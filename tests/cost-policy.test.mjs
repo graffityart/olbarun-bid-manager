@@ -14,9 +14,9 @@ test('two distinct post-wait observations reduce exactly ten won',()=>{
  assert.equal(choose(verify.state,{bid:890,now:1540000,observedAt:1540000}).next,880);
 });
 test('outside target including More increases fifty and never exceeds max',()=>{
- for(const extra of [{rank:4},{source:'MORE',rank:1}]){const d=choose(null,extra);assert.equal(d.action,'increase');assert.equal(d.next,950);}
- for(const bid of [960,1000,1010])assert.equal(choose(null,{bid,rank:4}).action,'hold');
- assert.equal(choose(null,{bid:950,rank:4}).next,1000);
+ for(const extra of [{rank:4},{source:'MORE',rank:1}]){const d=choose(null,extra);assert.equal(d.action,'increase');assert.equal(d.next,extra.source==='MORE'?1000:950);}
+ for(const bid of [1000,1010])assert.equal(choose(null,{bid,rank:4}).action,'hold');
+ assert.equal(choose(null,{bid:950,rank:4}).next,1000);assert.equal(choose(null,{bid:960,rank:4}).next,1000);
 });
 test('unknown stale wrong timing and externally changed bids never change',()=>{
  for(const extra of [{rank:null},{observedAt:1},{observedAt:1000001},{bid:60}])assert.equal(choose(null,extra).action,'hold');

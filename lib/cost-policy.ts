@@ -1,3 +1,4 @@
+import {increaseForRank} from './adaptive-bid.ts';
 export type CostState = {
  context: string; stable: number; lastObservation: number; changedAt: number;
  appliedBid?: number; goodBid?: number; failedBid?: number;
@@ -27,7 +28,8 @@ export function costDecision(input:{bid:number;min:number;max:number;target:numb
   s.goodBid=x.bid;s.pending=undefined;s.stable=0;
  }
  if(outside){s.stable=0;s.goodBid=undefined;s.failedBid=undefined;
-  return x.bid+50>x.max?hold('최대 입찰가 · 금액 유지'):{action:'increase' as CostAction,next:x.bid+50,state:s,reason:x.source==='MORE'?'상단 미노출 · 더보기 확인 · 50원 증액':'상단 목표 밖 · 50원 증액'};
+  const next=increaseForRank(x.bid,x.max,x.target,x.rank,x.source);
+  return next===x.bid?hold('최대 입찰가 · 금액 유지'):{action:'increase' as CostAction,next,state:s,reason:`${x.source==='MORE'?'더보기 확인':'상단 목표 밖'} · ${next-x.bid}원 증액`};
  }
  s.goodBid=x.bid;s.stable++;
  const checks=x.stableChecks??2;

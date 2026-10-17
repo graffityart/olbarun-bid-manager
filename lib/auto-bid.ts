@@ -1,3 +1,4 @@
+import {increaseForRank} from './adaptive-bid.ts';
 // Validate again against fresh UI settings and effective Naver bid before any PUT.
 export function assertAutoBid(row:any, original:any, kw:any, group:any, expected:number, next:number, observation:any, device:string, now:number) {
  if(!row||row.bid!==expected||row.max<next||row.target!==original.target||row.group!==original.group||row.keyword!==original.keyword||next!==expected+10)throw Error('Settings changed');
@@ -19,7 +20,7 @@ export function cappedActualBid(row:any, kw:any, group:any):number|null {
 
 export function assertCostBid(row:any,original:any,kw:any,group:any,expected:number,next:number,observation:any,device:string,now:number,action:string) {
  const increase=action==='increase', reduce=action==='reduce', restore=action==='restore';
- if(!row||row.target!==original.target||row.max!==original.max||row.min!==original.min||row.group!==original.group||row.keyword!==original.keyword||row.bid!==expected||!Number.isInteger(next)||next%10||next<Math.max(70,row.min??70)||next>row.max||(!increase&&!reduce&&!restore)||(increase&&next!==expected+50)||(reduce&&next>=expected)||(restore&&next<=expected))throw Error('Settings changed');
+ if(!row||row.target!==original.target||row.max!==original.max||row.min!==original.min||row.group!==original.group||row.keyword!==original.keyword||row.bid!==expected||!Number.isInteger(next)||next%10||next<Math.max(70,row.min??70)||next>row.max||(!increase&&!reduce&&!restore)||(increase&&(next<=expected||next!==increaseForRank(expected,row.max,row.target,observation?.rank,observation?.source)))||(reduce&&next!==Math.max(70,row.min??70,expected-10))||(restore&&next<=expected))throw Error('Settings changed');
  if(observation?.status!=='visible'||observation.device!==device||!['MAIN','MORE'].includes(observation.source)||!Number.isInteger(observation.rank)||observation.rank<1||!Number.isFinite(Date.parse(observation.observedAt))||now-Date.parse(observation.observedAt)>60000||Date.parse(observation.observedAt)>now||(reduce?(observation.source!=='MAIN'||observation.rank>row.target):(observation.source==='MAIN'&&observation.rank<=row.target)))throw Error('Rank is not fresh or outside target');
  cappedActualBid(row,kw,group);
  if(kw.userLock||group.userLock)throw Error('Naver keyword or group is paused');

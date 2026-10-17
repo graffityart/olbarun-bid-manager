@@ -8,13 +8,14 @@ import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {decryptCredentials} from '../lib/credentials.ts';
 import {siteForRow} from '../lib/ad-sites.ts';
-import {runRotation} from '../lib/rotation.ts';
+import {runPriorityRotation} from '../lib/priority-rotation.ts';
+import {BID_POLICY} from '../lib/adaptive-bid.ts';
 import {costDecision,costApplied} from '../lib/cost-policy.ts';
 import {resumeSignature} from '../lib/resume-job.ts';
 import {serialWork,searchDelay} from '../lib/shared-work.ts';
 import {groupKey,assertGroupSelection} from '../lib/group-scope.ts';
 import {makeAutoJob} from '../lib/auto-job.ts';
-import {assertAutoBid,cappedActualBid,assertCostBid} from '../lib/auto-bid.ts';
+import {cappedActualBid,assertCostBid} from '../lib/auto-bid.ts';
 if(!process.env.DATABASE_URL || !process.env.APP_PASSWORD || process.env.APP_PASSWORD.length<16) throw Error('DATABASE_URL and original APP_PASSWORD are required');
 const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1,connectionTimeoutMillis:10000});
 const db=await pool.connect(); // Advisory lock belongs to this exact persistent session.
@@ -22,10 +23,10 @@ const run=promisify(execFile), checker=fileURLToPath(new URL('./rank-check.mjs',
 let shutdown=false;
 process.on('SIGINT',()=>{shutdown=true});process.on('SIGTERM',()=>{shutdown=true});
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const load=async id=>{const r=await db.query("SELECT (CASE WHEN id='auto' OR id LIKE 'auto-job:%' THEN data::jsonb #- '{checkpoint,observations}' ELSE data::jsonb END)::text AS data FROM bid_states WHERE id=$1",[id]);return r.rows[0]?JSON.parse(r.rows[0].data):null};
+const load=async id=>{const r=await db.query("SELECT (CASE WHEN id='auto' OR id LIKE 'auto-job:%' THEN (data::jsonb #- '{checkpoint,observations}') #- '{checkpoint,queue}' ELSE data::jsonb END)::text AS data FROM bid_states WHERE id=$1",[id]);return r.rows[0]?JSON.parse(r.rows[0].data):null};
 const save=(id,value)=>db.query('INSERT INTO bid_states(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=excluded.data',[id,JSON.stringify(value)]);
 const work=serialWork();let lastSearchStarted=0;
-const heartbeat=()=>save('auto-worker',{resumeMode:true,multiGroup:true,lowestMode:true,strategy:'cost',state:shutdown?'stopping':'online',updatedAt:new Date().toISOString()});
+const heartbeat=()=>save('auto-worker',{policyVersion:BID_POLICY,priorityMode:true,resumeMode:true,multiGroup:true,lowestMode:true,strategy:'cost',state:shutdown?'stopping':'online',updatedAt:new Date().toISOString()});
 async function request(c,method,path,body){
  const ts=String(Date.now()), signature=createHmac('sha256',c.NAVER_SECRET_KEY).update(`${ts}.${method}.${path.split('?')[0]}`).digest('base64');
  const res=await fetch('https://api.searchad.naver.com'+path,{method,signal:AbortSignal.timeout(20000),headers:{'Content-Type':'application/json','X-Timestamp':ts,'X-API-KEY':c.NAVER_API_KEY,'X-Customer':c.NAVER_CUSTOMER_ID,'X-Signature':signature},...(body?{body:JSON.stringify(body)}:{})});
@@ -37,21 +38,22 @@ async function execute(job,key){
  const update=async patch=>db.query("UPDATE bid_states SET data=(data::jsonb || $1::jsonb)::text WHERE id=$3 AND data::jsonb->>'jobId'=$2 AND data::jsonb->>'state' IN ('queued','running')",[JSON.stringify({...patch,updatedAt:new Date().toISOString()}),job.jobId,key]);
  const stopped=async()=>{await heartbeat();const current=await load(key);return shutdown||current?.jobId!==job.jobId||current.state!=='running'};
  try{
-  await update({state:'running',message:'전체 순위 조회'});
+  if(job.policyVersion!==BID_POLICY){await update({state:'failed',message:'입찰 규칙 업데이트 전 작업입니다. 처음부터 다시 실행하세요.'});return;}
+  await update({state:'running',message:'우선순위 조회 · 조회 직후 입찰'});
   const raw=await db.query("SELECT data FROM bid_states WHERE id='credentials'");
   if(!raw.rows.length)throw Error('저장된 네이버 연결 정보가 없습니다.');
   stage='연결 정보 복호화';
   const c=decryptCredentials(raw.rows[0].data);
-  let cycle=job.startMode==='resume'?(job.cycle??0):0;let resume=job.startMode==='resume'?job.checkpoint:null;
+  let cycle=job.startMode==='resume'?(job.cycle??0):0;let resume=job.startMode==='resume'?job.checkpoint:null;let priorityQueue=resume?.queue;
   if(resume?.phase==='complete'){resume=null;while(job.nextCycleAt>Date.now()&&!await stopped())await sleep(Math.min(5000,job.nextCycleAt-Date.now()));}
   while(!await stopped()){
    const state=await load('main');makeAutoJob(state,job.ids,job.device,job.waitSeconds,job.jobId);assertGroupSelection(state.rows,job.ids,job.group);
    const rows=job.ids.map(id=>state.rows.find(r=>r.id===id));
    const byId=new Map(rows.map(r=>[r.id,r]));
    let completed=resume?.nextObserve??0;if(!resume)cycle++;
-   await update({cycle,completed,total:rows.length,message:resume?'중지 지점에서 이어서 처리':'전체 순위 조회',nextCycleAt:null});
+   await update({cycle,completed,total:rows.length,message:resume?'중지 지점에서 이어서 처리':'미달 우선 조회 · 조회 직후 입찰',nextCycleAt:null});
    const ports={
-    resume:resume??undefined,checkpoint:async checkpoint=>{await db.query("UPDATE bid_states SET data=(data::jsonb || $1::jsonb)::text WHERE id=$3 AND data::jsonb->>'jobId'=$2 AND data::jsonb->>'state' IN ('running','stop_requested')",[JSON.stringify({checkpoint,resumeSignature:resumeSignature(state.rows,job)}),job.jobId,key]);},
+    queue:priorityQueue,resume:resume??undefined,checkpoint:async checkpoint=>{await db.query("UPDATE bid_states SET data=(data::jsonb || $1::jsonb)::text WHERE id=$3 AND data::jsonb->>'jobId'=$2 AND data::jsonb->>'state' IN ('running','stop_requested')",[JSON.stringify({checkpoint,resumeSignature:resumeSignature(state.rows,job)}),job.jobId,key]);},
     deferReflectionWait:true,now:()=>Date.now(),stopped,wait:async seconds=>{await heartbeat();await sleep(seconds*1000)},
     observe:async row=>{
      const change=await load(`bid-change:${row.id}`),policy=await load(`cost:${job.device}:${row.id}`);
@@ -103,7 +105,7 @@ async function execute(job,key){
      await save(`rank:${job.device}:${r.id}`,{id:r.id,keyword:r.keyword,device:job.device,host,...observation,ads:undefined,optimization:oldRank?.optimization});
      completed++;await update({completed:Math.min(completed,rows.length),message:'순위 조회 · '+r.keyword});
 
-     return {rank:observation.status==='visible'?observation.rank:null,device:job.device,observedAt:Date.parse(observation.observedAt)};
+     return {rank:observation.status==='visible'?observation.rank:null,source:observation.source,device:job.device,observedAt:Date.parse(observation.observedAt)};
     },
     manage:async(row,fresh)=>{
      const id=row.id,latest=await load('main');makeAutoJob(latest,job.ids,job.device,job.waitSeconds,job.jobId);
@@ -146,58 +148,15 @@ async function execute(job,key){
      const confirmed=await request(c,'GET',`/ncc/keywords/${encodeURIComponent(id)}`);
      if(confirmed.bidAmt!==decision.next||confirmed.useGroupBidAmt)throw Error('Settings changed');
      const applied=costApplied(decision.state,decision.action,actual,decision.next,Date.now());
-     await display(applied,decision.action==='reduce'?'감액 시험 · 반영 확인 대기':decision.action==='restore'?'이전 금액 복구 · 순위 재확인':'50원 증액 · 반영 확인 대기');
+     await display(applied,decision.action==='reduce'?'감액 시험 · 반영 확인 대기':decision.action==='restore'?'이전 금액 복구 · 순위 재확인':`${decision.next-actual}원 증액 · 반영 확인 대기`);
      await db.query("UPDATE bid_states SET data=jsonb_set(data::jsonb,ARRAY['rows',x.idx::text,'bid'],$1::jsonb)::text FROM (SELECT (ordinality-1) idx FROM bid_states,jsonb_array_elements(data::jsonb->'rows') WITH ORDINALITY e WHERE id='main' AND e.value->>'id'=$2) x WHERE bid_states.id='main'",[JSON.stringify(decision.next),id]);
      const log={group:job.group,groupName:r.group,campaignName:r.campaignName,keyword:r.keyword,keywordId:id,before:actual,after:decision.next,time:new Date().toISOString(),kind:decision.action==='reduce'?'자동감액':decision.action==='restore'?'순위복구':'자동입찰',device:job.device,source:observation.source,jobId:job.jobId};
      await db.query('INSERT INTO bid_logs(id,data,created) VALUES($1,$2,$3)',[attempt.id,JSON.stringify(log),log.time]);
      await save('bid-attempt:'+attempt.id,{...attempt,state:'confirmed'});
      return {changed:true,bid:decision.next,status:decision.action==='reduce'?'reduced':decision.action==='restore'?'restored':'increased'};
     },
-    apply:async(id,expected,next)=>{
-     const latest=await load('main');makeAutoJob(latest,job.ids,job.device,job.waitSeconds,job.jobId);
-     const r=latest.rows.find(r=>r.id===id),original=byId.get(id);activeKeyword=r?.keyword??id;stage="설정 검증";
-     if(r.bid!==expected||r.max<next||r.target!==original.target||groupKey(r)!==groupKey(original)||r.keyword!==original.keyword||next!==expected+10)throw Error('실행 중 설정이 변경되어 중지했습니다. 설정 확인 후 다시 실행하세요.');
-     stage='네이버 키워드 조회';
-     const kw=await request(c,'GET',`/ncc/keywords/${encodeURIComponent(id)}`);
-     stage='네이버 그룹 조회';
-     const group=await request(c,'GET',`/ncc/adgroups/${encodeURIComponent(kw.nccAdgroupId)}`);
-     const actualCap=cappedActualBid(r,kw,group);
-     if(actualCap!==null){
-      // Reconcile only the displayed bid. Never change target/max or Naver bid.
-      await db.query("UPDATE bid_states SET data=jsonb_set(data::jsonb,ARRAY['rows',x.idx::text,'bid'],$1::jsonb)::text FROM (SELECT (ordinality-1) idx FROM bid_states,jsonb_array_elements(data::jsonb->'rows') WITH ORDINALITY e WHERE id='main' AND e.value->>'id'=$2) x WHERE bid_states.id='main'",[JSON.stringify(actualCap),id]);
-      return {status:'capped',bid:actualCap};
-     }
-     // The live effective bid is the baseline; never add ten to stale UI data.
-     expected=kw.useGroupBidAmt?group.bidAmt:kw.bidAmt;
-     next=expected+10;
-     r.bid=expected;
-     const observation=await load(`rank:${job.device}:${id}`);
-     // More pages may expose only a display URL: verify the observed creative
-     // belongs to this Naver ad group before using that rank for a write.
-     if(observation?.source==='MORE') {
-      const creatives=await request(c,'GET',`/ncc/ads?nccAdgroupId=${encodeURIComponent(kw.nccAdgroupId)}`);
-      if(!Array.isArray(creatives)||!creatives.some(ad=>ad.nccAdId===observation.adId&&ad.nccAdgroupId===kw.nccAdgroupId))throw Error('Naver keyword/group identity changed');
-     }
-     stage="현재 입찰가·광고 상태 검증";
-     assertAutoBid(r,original,kw,group,expected,next,observation,job.device,Date.now());
-     const attempt={id:randomUUID(),jobId:job.jobId,keyword:r.keyword,before:expected,after:next,state:'pending',time:new Date().toISOString()};
-     if(await stopped())return false;
-     await save('bid-attempt:'+attempt.id,attempt);
-     if(await stopped()){await save('bid-attempt:'+attempt.id,{...attempt,state:'cancelled'});return false;}
-     stage='네이버 입찰 변경';
-     await request(c,'PUT','/ncc/keywords?fields=bidAmt',[{...kw,bidAmt:next,useGroupBidAmt:false}]);
-     stage='변경 결과 검증';
-     const confirmed=await request(c,'GET',`/ncc/keywords/${encodeURIComponent(id)}`);
-     if(confirmed.bidAmt!==next||confirmed.useGroupBidAmt)throw Error('입찰 변경 결과를 확정할 수 없어 중지했습니다. 네이버에서 확인 후 동기화하세요.');
-     stage='변경 기록 저장';
-     // Update only the bid, preserving any concurrent UI settings.
-     await db.query("UPDATE bid_states SET data=jsonb_set(data::jsonb,ARRAY['rows',x.idx::text,'bid'],$1::jsonb)::text FROM (SELECT (ordinality-1) idx FROM bid_states,jsonb_array_elements(data::jsonb->'rows') WITH ORDINALITY e WHERE id='main' AND e.value->>'id'=$2) x WHERE bid_states.id='main'",[JSON.stringify(next),id]);
-     const log={group:job.group,groupName:r.group,campaignName:r.campaignName,keywordId:id,keyword:r.keyword,before:expected,after:next,time:new Date().toISOString(),kind:'자동입찰',device:job.device,jobId:job.jobId};
-     await db.query('INSERT INTO bid_logs(id,data,created) VALUES($1,$2,$3)',[attempt.id,JSON.stringify(log),log.time]);
-     await save('bid-attempt:'+attempt.id,{...attempt,state:'confirmed'});
-     return {status:'increased',bid:next};
-    },
-    event:async e=>{if(['increased','reduced','restored'].includes(e.status)&&e.id)await save(`bid-change:${e.id}`,{changedAt:Date.now()});if(e.status==='monitoring'){await update({lastEvent:e});return;}await update({message:e.status==='waiting'?`입찰 반영 ${job.waitSeconds}초 대기`:e.status==='unknown'?'순위 미확인 · 금액 유지':e.status==='reached'?'목표 이내 · 금액 유지':e.status==='capped'?'최대 입찰가 · 금액 유지':e.status==='increased'?'+10원 적용':e.status==='reduced'?'감액 적용 · 순위 재확인':e.status==='restored'?'이전 금액 복구':e.status==='monitoring'?'목표 순위·절감 상태 감시 중':'중지 확인',lastEvent:e});},
+    apply:async()=>{throw Error('Legacy bid path is disabled');},
+    event:async e=>{if(['increased','reduced','restored'].includes(e.status)&&e.id)await save(`bid-change:${e.id}`,{changedAt:Date.now()});if(e.status==='monitoring'){await update({lastEvent:e});return;}await update({message:e.status==='waiting'?`입찰 반영 ${job.waitSeconds}초 대기`:e.status==='unknown'?'순위 미확인 · 금액 유지':e.status==='reached'?'목표 이내 · 금액 유지':e.status==='capped'?'최대 입찰가 · 금액 유지':e.status==='increased'?'단계별 증액 적용':e.status==='reduced'?'감액 적용 · 순위 재확인':e.status==='restored'?'이전 금액 복구':e.status==='monitoring'?'목표 순위·절감 상태 감시 중':'중지 확인',lastEvent:e});},
    };
    const manage=ports.manage;
    if(manage)ports.manage=async(row,fresh)=>{
@@ -212,12 +171,9 @@ async function execute(job,key){
      return manage(row,fresh);
     });
    };
-   const result=await runRotation(rows,job.device,job.waitSeconds,ports);resume=null;
+   const result=await runPriorityRotation(rows,job.device,job.waitSeconds,ports);priorityQueue=result.queue;resume=null;
    if(result.stopped)break;
-   if(!result.changes){
-    await update({message:'순위 감시 중 · 다음 전체 조회 대기',nextCycleAt:Date.now()+job.waitSeconds*1000});
-    for(let remaining=job.waitSeconds;remaining>0&&!await stopped();remaining-=5){await heartbeat();await sleep(Math.min(5,remaining)*1000);}
-   }
+
   }
  }catch(error){
   // Only explicitly whitelisted errors are shown; never persist raw network/credential errors.
@@ -237,7 +193,7 @@ try{
  const tasks=new Map();
  while(!shutdown){
   await heartbeat();
-  const records=await db.query("SELECT id,(CASE WHEN data::jsonb->>'state'='queued' THEN data::jsonb ELSE data::jsonb #- '{checkpoint,observations}' END)::text AS data FROM bid_states WHERE id='auto' OR id LIKE 'auto-job:%' ORDER BY id");
+  const records=await db.query("SELECT id,(CASE WHEN data::jsonb->>'state'='queued' THEN data::jsonb ELSE (data::jsonb #- '{checkpoint,observations}') #- '{checkpoint,queue}' END)::text AS data FROM bid_states WHERE id='auto' OR id LIKE 'auto-job:%' ORDER BY id");
   for(const record of records.rows){
    const job=JSON.parse(record.data),key=record.id;
    if(job.state==='queued'&&!tasks.has(key)){
