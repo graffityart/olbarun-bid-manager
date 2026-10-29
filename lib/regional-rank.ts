@@ -4,6 +4,14 @@
 // observation provider can supply an attested provenance record.
 export const REQUIRED_REGION = 'KR-26'; // Busan metropolitan city
 
+/** @typedef {{ code?: string, verified?: boolean, verificationMethod?: string, providerId?: string | null, evidenceId?: string | null, reason?: string }} RegionEvidence */
+/** @typedef {{ region?: RegionEvidence, device?: string, keyword?: string, expectedHost?: string, status?: string, rank?: number | null, observedAt?: string, [key: string]: unknown }} RankObservation */
+/** @typedef {{ device?: string, keyword?: string, host?: string, now?: number }} VerificationOptions */
+
+/**
+ * @param {RankObservation | null | undefined} observation
+ * @param {VerificationOptions} [options]
+ */
 export function regionalRankVerified(observation, { device, keyword, host, now = Date.now() } = {}) {
   if (!observation || observation.region?.code !== REQUIRED_REGION) return false;
   if (observation.region?.verified !== true) return false;
@@ -13,11 +21,12 @@ export function regionalRankVerified(observation, { device, keyword, host, now =
   if (!['PC', 'MOBILE'].includes(device) || observation.device !== device) return false;
   if (!keyword || observation.keyword !== keyword || !host || observation.expectedHost !== host) return false;
   if (observation.status !== 'visible' || !Number.isInteger(observation.rank) || observation.rank < 1) return false;
-  const observedAt = Date.parse(observation.observedAt);
+  const observedAt = Date.parse(observation.observedAt ?? '');
   if (!Number.isFinite(observedAt) || observedAt > now + 5000 || now - observedAt > 60000) return false;
   return true;
 }
 
+/** @param {RankObservation} observation */
 export function unverifiedRegionalObservation(observation) {
   return {
     ...observation,
