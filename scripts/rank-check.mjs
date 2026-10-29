@@ -1,4 +1,5 @@
 import { chromium, devices } from 'playwright';
+import { unverifiedRegionalObservation } from '../lib/regional-rank.ts';
 import { normalizeAdHost } from '../lib/ad-sites.ts';
 import { mobileMoreBatch,validRankList, matchRank, safeMoreUrl } from '../lib/rank-observation.ts';
 
@@ -133,12 +134,12 @@ try {
       }
     } catch(error) { if(error.message==='Search HTTP 403')throw error; moreError=error.message; moreStatus='unknown'; result={status:'unknown',rank:null,adId:null}; source=null; }
   }
-  console.log(JSON.stringify({keyword,expectedHost,device,observedAt:new Date().toISOString(),...result,
+  console.log(JSON.stringify(unverifiedRegionalObservation({keyword,expectedHost,device,observedAt:new Date().toISOString(),...result,
     capturePaths,source,mainRank,moreRank,mainObservedCount:ads.length,moreObservedCount,morePages,moreStatus,moreError,
     observedCount:source==='MORE'||morePages>0?moreObservedCount:ads.length,ads:observedAds,
-    note:'Read-only observation from this VPS. More ranks are separate from main search ranks. No ad clicks or bid changes.'},null,2));
+    note:'Read-only observation from this VPS. Busan region is NOT verified. More ranks are separate from main search ranks. No ad clicks or bid changes.'}),null,2));
 } catch (error) {
-  console.log(JSON.stringify({ keyword, expectedHost, device, status: 'unknown', rank: null,
-    error: error.message }, null, 2));
+  console.log(JSON.stringify(unverifiedRegionalObservation({ keyword, expectedHost, device, status: 'unknown', rank: null,
+    error: error.message }), null, 2));
   process.exitCode = 1;
 } finally { await browser.close(); }
