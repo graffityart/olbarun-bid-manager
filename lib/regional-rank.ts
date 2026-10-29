@@ -4,15 +4,11 @@
 // observation provider can supply an attested provenance record.
 export const REQUIRED_REGION = 'KR-26'; // Busan metropolitan city
 
-/** @typedef {{ code?: string, verified?: boolean, verificationMethod?: string, providerId?: string | null, evidenceId?: string | null, reason?: string }} RegionEvidence */
-/** @typedef {{ region?: RegionEvidence, device?: string, keyword?: string, expectedHost?: string, status?: string, rank?: number | null, observedAt?: string, [key: string]: unknown }} RankObservation */
-/** @typedef {{ device?: string, keyword?: string, host?: string, now?: number }} VerificationOptions */
+type RegionEvidence = { code?: string; verified?: boolean; verificationMethod?: string; providerId?: string | null; evidenceId?: string | null; reason?: string };
+type RankObservation = { region?: RegionEvidence; device?: string; keyword?: string; expectedHost?: string; status?: string; rank?: number | null; observedAt?: string; [key: string]: unknown };
+type VerificationOptions = { device?: string; keyword?: string; host?: string; now?: number };
 
-/**
- * @param {RankObservation | null | undefined} observation
- * @param {VerificationOptions} [options]
- */
-export function regionalRankVerified(observation, { device, keyword, host, now = Date.now() } = {}) {
+export function regionalRankVerified(observation: RankObservation | null | undefined, { device, keyword, host, now = Date.now() }: VerificationOptions = {}) {
   if (!observation || observation.region?.code !== REQUIRED_REGION) return false;
   if (observation.region?.verified !== true) return false;
   if (observation.region?.verificationMethod !== 'independent-provider') return false;
@@ -26,8 +22,7 @@ export function regionalRankVerified(observation, { device, keyword, host, now =
   return true;
 }
 
-/** @param {RankObservation} observation */
-export function unverifiedRegionalObservation(observation) {
+export function unverifiedRegionalObservation(observation: RankObservation) {
   return {
     ...observation,
     region: {
