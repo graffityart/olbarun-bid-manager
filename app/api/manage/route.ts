@@ -1,3 +1,4 @@
+import {TRADING_SCHEDULE} from '@/lib/trading-hours';
 import {BID_POLICY} from '@/lib/adaptive-bid';
 import {connectionInfo,updatedCredentials} from "@/lib/connection-info";
 import {resumeSignature,resumeCheckpoint,publicJob} from "@/lib/resume-job";
@@ -28,6 +29,7 @@ export async function POST(req:Request){try{return await withManagementLock(asyn
  const saved=await db().prepare("SELECT data FROM bid_states WHERE id=?").bind("main").first();
  const worker=await db().prepare("SELECT data FROM bid_states WHERE id=?").bind("auto-worker").first();const w=worker?JSON.parse(worker.data):null;
  if(!w||w.state!=="online"||!Number.isFinite(Date.parse(w.updatedAt))||Date.now()-Date.parse(w.updatedAt)>90000)throw Error("VPS 자동입찰 서비스를 먼저 실행하세요. 서버 연결이 확인되지 않았습니다.");
+ if(w.scheduleVersion!==TRADING_SCHEDULE)throw Error("예약 운영을 위해 VPS 코드를 업데이트하고 작업기를 재시작하세요.");
  if(w.policyVersion!==BID_POLICY)throw Error("300원·50원 단계별 입찰을 사용하려면 VPS 코드를 업데이트하고 작업기를 재시작하세요.");
  if(w.multiGroup!==true)throw Error("여러 그룹 실행을 위해 VPS 코드를 업데이트하고 작업기를 재시작하세요.");
  if(w.strategy!=="cost")throw Error("VPS 코드를 업데이트하고 작업기를 재시작하세요. 자동 절감 기능 준비가 필요합니다.");
@@ -41,7 +43,7 @@ export async function POST(req:Request){try{return await withManagementLock(asyn
   if(prior?.jobId!==b.previousJobId)throw Error('작업 상태가 변경되었습니다. 새로고침 후 다시 선택하세요.');
   const records=await db().prepare("SELECT data FROM bid_states WHERE id LIKE 'bid-attempt:%' AND data::jsonb->>'jobId'=?").bind(prior.jobId).all();
   const signature=resumeSignature(savedState.rows,job);const checkpoint=resumeCheckpoint(prior,signature,records.results.map((r:any)=>JSON.parse(r.data)));
-  job={...job,startMode:'resume',checkpoint,resumeSignature:signature,cycle:prior.cycle??0,completed:checkpoint.nextObserve,total:job.ids.length,nextCycleAt:prior.nextCycleAt??null,resumedFrom:prior.jobId};
+  job={...job,startMode:'resume',checkpoint,resumeSignature:signature,runDate:prior.runDate,cycle:prior.cycle??0,completed:checkpoint.nextObserve,total:job.ids.length,nextCycleAt:prior.nextCycleAt??null,resumedFrom:prior.jobId};
  }else job={...job,startMode:'restart',resumeSignature:resumeSignature(savedState.rows,job)};
  assertGroupSelection(savedState.rows,job.ids,b.group);
  if(b.lowestRank!==undefined&&b.lowestRank!==null&&(!Number.isInteger(b.lowestRank)||b.lowestRank<1||b.lowestRank>5||job.ids.some((id:string)=>savedState.rows.find((r:any)=>r.id===id)?.target!==b.lowestRank)))throw Error("최저가 순위와 키워드 목표 순위를 확인하세요.");

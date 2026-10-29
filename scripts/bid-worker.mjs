@@ -1,3 +1,4 @@
+import {tradingWindow,TRADING_SCHEDULE,openingOrder,openingDecision,dailyRunState} from '../lib/trading-hours.ts';
 import { searchAccessDenied, SearchAccessDenied } from '../lib/search-access.ts';
 import { reflectionRemaining } from '../lib/reflection-wait.ts';
 // Persistent VPS worker. No job is created here; only authenticated UI requests run.
@@ -26,7 +27,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const load=async id=>{const r=await db.query("SELECT (CASE WHEN id='auto' OR id LIKE 'auto-job:%' THEN (data::jsonb #- '{checkpoint,observations}') #- '{checkpoint,queue}' ELSE data::jsonb END)::text AS data FROM bid_states WHERE id=$1",[id]);return r.rows[0]?JSON.parse(r.rows[0].data):null};
 const save=(id,value)=>db.query('INSERT INTO bid_states(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=excluded.data',[id,JSON.stringify(value)]);
 const work=serialWork();let lastSearchStarted=0;
-const heartbeat=()=>save('auto-worker',{policyVersion:BID_POLICY,priorityMode:true,resumeMode:true,multiGroup:true,lowestMode:true,strategy:'cost',state:shutdown?'stopping':'online',updatedAt:new Date().toISOString()});
+const heartbeat=()=>save('auto-worker',{scheduleVersion:TRADING_SCHEDULE,policyVersion:BID_POLICY,priorityMode:true,resumeMode:true,multiGroup:true,lowestMode:true,strategy:'cost',state:shutdown?'stopping':'online',updatedAt:new Date().toISOString()});
 async function request(c,method,path,body){
  const ts=String(Date.now()), signature=createHmac('sha256',c.NAVER_SECRET_KEY).update(`${ts}.${method}.${path.split('?')[0]}`).digest('base64');
  const res=await fetch('https://api.searchad.naver.com'+path,{method,signal:AbortSignal.timeout(20000),headers:{'Content-Type':'application/json','X-Timestamp':ts,'X-API-KEY':c.NAVER_API_KEY,'X-Customer':c.NAVER_CUSTOMER_ID,'X-Signature':signature},...(body?{body:JSON.stringify(body)}:{})});
@@ -34,26 +35,40 @@ async function request(c,method,path,body){
  return res.json(); // A write timeout/invalid response is never retried.
 }
 async function execute(job,key){
- let stage="초기화",activeKeyword="";
+ let stage="초기화",activeKeyword="",runDate=null;
  const update=async patch=>db.query("UPDATE bid_states SET data=(data::jsonb || $1::jsonb)::text WHERE id=$3 AND data::jsonb->>'jobId'=$2 AND data::jsonb->>'state' IN ('queued','running')",[JSON.stringify({...patch,updatedAt:new Date().toISOString()}),job.jobId,key]);
- const stopped=async()=>{await heartbeat();const current=await load(key);return shutdown||current?.jobId!==job.jobId||current.state!=='running'};
+ const cancelled=async()=>{await heartbeat();const current=await load(key);return shutdown||current?.jobId!==job.jobId||current.state!=='running'};
+ const stopped=async()=>{const cancel=await cancelled();const time=tradingWindow(Date.now());return cancel||!time.allowed||time.dayKey!==runDate;};
  try{
-  if(job.policyVersion!==BID_POLICY){await update({state:'failed',message:'입찰 규칙 업데이트 전 작업입니다. 처음부터 다시 실행하세요.'});return;}
+  if(job.policyVersion!==BID_POLICY||job.scheduleVersion!==TRADING_SCHEDULE){await update({state:'failed',message:'입찰 규칙 업데이트 전 작업입니다. 처음부터 다시 실행하세요.'});return;}
   await update({state:'running',message:'우선순위 조회 · 조회 직후 입찰'});
   const raw=await db.query("SELECT data FROM bid_states WHERE id='credentials'");
   if(!raw.rows.length)throw Error('저장된 네이버 연결 정보가 없습니다.');
   stage='연결 정보 복호화';
   const c=decryptCredentials(raw.rows[0].data);
-  let cycle=job.startMode==='resume'?(job.cycle??0):0;let resume=job.startMode==='resume'?job.checkpoint:null;let priorityQueue=resume?.queue;
-  if(resume?.phase==='complete'){resume=null;while(job.nextCycleAt>Date.now()&&!await stopped())await sleep(Math.min(5000,job.nextCycleAt-Date.now()));}
-  while(!await stopped()){
+  let cycle=0,resume=job.startMode==='resume'?job.checkpoint:null,priorityQueue=resume?.queue;
+  const dailyKey='daily:'+key;
+  while(!await cancelled()){
+   const clock=tradingWindow(Date.now());
+   if(!clock.allowed){
+    await update({scheduleWaiting:true,nextStartAt:clock.nextStart,message:clock.waitingForExposure?'05:00 광고 노출 반영 대기 · 05:30 자동입찰 시작':'예약 대기 · 월~토 05:30~20:00 자동입찰'});
+    await sleep(5000);continue;
+   }
+   if(runDate!==clock.dayKey){
+    const daily=await load(dailyKey);const sameDay=daily?.date===clock.dayKey;
+    const dailyState=dailyRunState(clock.dayKey,sameDay?(daily.completedRounds??0):0,job,resume);
+    cycle=dailyState.cycle;resume=dailyState.resume;runDate=clock.dayKey;
+    priorityQueue=resume?.queue;
+   }
    const state=await load('main');makeAutoJob(state,job.ids,job.device,job.waitSeconds,job.jobId);assertGroupSelection(state.rows,job.ids,job.group);
    const rows=job.ids.map(id=>state.rows.find(r=>r.id===id));
    const byId=new Map(rows.map(r=>[r.id,r]));
    let completed=resume?.nextObserve??0;if(!resume)cycle++;
-   await update({cycle,completed,total:rows.length,message:resume?'중지 지점에서 이어서 처리':'미달 우선 조회 · 조회 직후 입찰',nextCycleAt:null});
+   const singlePass=cycle<=2;let order;
+   if(singlePass&&!resume){const priorRanks=await db.query("SELECT data FROM bid_states WHERE id LIKE $1",[`rank:${job.device}:%`]);order=openingOrder(rows,priorRanks.rows.map(r=>JSON.parse(r.data)));}
+   await update({runDate,scheduleWaiting:false,nextStartAt:null,cycle,completed,total:rows.length,message:singlePass?`당일 ${cycle}회차 · 목표 밖 우선 증액`:resume?'중지 지점에서 이어서 처리':'미달 우선 조회 · 조회 직후 입찰',nextCycleAt:null});
    const ports={
-    queue:priorityQueue,resume:resume??undefined,checkpoint:async checkpoint=>{await db.query("UPDATE bid_states SET data=(data::jsonb || $1::jsonb)::text WHERE id=$3 AND data::jsonb->>'jobId'=$2 AND data::jsonb->>'state' IN ('running','stop_requested')",[JSON.stringify({checkpoint,resumeSignature:resumeSignature(state.rows,job)}),job.jobId,key]);},
+    singlePass,order,queue:priorityQueue,resume:resume??undefined,checkpoint:async checkpoint=>{await db.query("UPDATE bid_states SET data=(data::jsonb || $1::jsonb)::text WHERE id=$3 AND data::jsonb->>'jobId'=$2 AND data::jsonb->>'state' IN ('running','stop_requested')",[JSON.stringify({checkpoint,resumeSignature:resumeSignature(state.rows,job)}),job.jobId,key]);},
     deferReflectionWait:true,now:()=>Date.now(),stopped,wait:async seconds=>{await heartbeat();await sleep(seconds*1000)},
     observe:async row=>{
      const change=await load(`bid-change:${row.id}`),policy=await load(`cost:${job.device}:${row.id}`);
@@ -128,7 +143,7 @@ async function execute(job,key){
       await update({message:r.keyword+' · 실제 금액 갱신 · 다음 조회 후 판단'});
       return {changed:false,status:'monitoring',bid:actual};
      }
-     const decision=costDecision({bid:actual,min:r.min??70,max:r.max,target:r.target,rank:fresh.rank,source:observation?.source??null,device:job.device,group:groupKey(r),observedAt:fresh.observedAt,now:Date.now(),waitSeconds:job.waitSeconds,stableChecks:2,exactRank:!!job.lowestRank,reductionAmount:10},previous);
+     const decision=openingDecision(costDecision({bid:actual,min:r.min??70,max:r.max,target:r.target,rank:fresh.rank,source:observation?.source??null,device:job.device,group:groupKey(r),observedAt:fresh.observedAt,now:Date.now(),waitSeconds:job.waitSeconds,stableChecks:2,exactRank:!!job.lowestRank,reductionAmount:10},previous),actual,cycle);
      if(decision.action==='hold'||(job.strategy!=='cost'&&decision.action==='reduce')){await display(decision.state,job.strategy!=='cost'&&decision.action==='reduce'?'목표 이내 · 금액 유지':decision.reason);return {changed:false,status:'monitoring',bid:actual};}
      if(observation?.source==='MORE'){
       const creatives=await request(c,'GET',`/ncc/ads?nccAdgroupId=${encodeURIComponent(kw.nccAdgroupId)}`);
@@ -144,6 +159,7 @@ async function execute(job,key){
      await save('bid-attempt:'+attempt.id,attempt);await save(key,blocked);
      if(await stopped()){await save(key,previous??decision.state);await save('bid-attempt:'+attempt.id,{...attempt,state:'cancelled'});return {changed:false,stopped:true,status:'stopped',bid:actual};}
      stage='네이버 증감액 적용';
+     if(await stopped()){await save(key,previous??decision.state);await save('bid-attempt:'+attempt.id,{...attempt,state:'cancelled'});return {changed:false,stopped:true,status:'stopped',bid:actual};}
      await request(c,'PUT','/ncc/keywords?fields=bidAmt',[{...kw,bidAmt:decision.next,useGroupBidAmt:false}]);
      const confirmed=await request(c,'GET',`/ncc/keywords/${encodeURIComponent(id)}`);
      if(confirmed.bidAmt!==decision.next||confirmed.useGroupBidAmt)throw Error('Settings changed');
@@ -172,7 +188,8 @@ async function execute(job,key){
     });
    };
    const result=await runPriorityRotation(rows,job.device,job.waitSeconds,ports);priorityQueue=result.queue;resume=null;
-   if(result.stopped)break;
+   if(result.stopped){if(await cancelled())break;resume=null;priorityQueue=undefined;continue;}
+   await save(dailyKey,{date:runDate,completedRounds:cycle,updatedAt:new Date().toISOString()});
 
   }
  }catch(error){
