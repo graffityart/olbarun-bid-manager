@@ -14,9 +14,9 @@ export function regionalRankVerified(observation: RankObservation | null | undef
   if (observation.region?.verificationMethod !== 'independent-provider') return false;
   if (typeof observation.region?.providerId !== 'string' || !observation.region.providerId.trim()) return false;
   if (typeof observation.region?.evidenceId !== 'string' || !observation.region.evidenceId.trim()) return false;
-  if (!['PC', 'MOBILE'].includes(device) || observation.device !== device) return false;
+  if ((device !== 'PC' && device !== 'MOBILE') || observation.device !== device) return false;
   if (!keyword || observation.keyword !== keyword || !host || observation.expectedHost !== host) return false;
-  if (observation.status !== 'visible' || !Number.isInteger(observation.rank) || observation.rank < 1) return false;
+  if (observation.status !== 'visible' || typeof observation.rank !== 'number' || !Number.isInteger(observation.rank) || observation.rank < 1) return false;
   const observedAt = Date.parse(observation.observedAt ?? '');
   if (!Number.isFinite(observedAt) || observedAt > now + 5000 || now - observedAt > 60000) return false;
   return true;
