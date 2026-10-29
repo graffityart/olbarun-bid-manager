@@ -44,8 +44,10 @@ async function execute(job,key){
   // Regional ads cannot be safely ranked from an unverified VPS search location.
   // Configure exact Naver ad-group IDs in REGIONAL_ADGROUP_IDS (comma-separated).
   // Fail closed before any rank observation or Naver bid API write.
+  // Every ad group in this account is Busan-only. The current VPS collector has
+  // no trustworthy location attestation, so block every group (including new ones).
   const regionalGroups = new Set(['grp-a001-01-000000074708929', ...(process.env.REGIONAL_ADGROUP_IDS ?? '').split(',').map(x=>x.trim()).filter(Boolean)]);
-  if(regionalGroups.has(job.group)){
+  if(true){ // All groups are Busan-only; no verified Busan rank provider is installed.
    await update({state:'failed',stage:'지역 순위 검증',message:'부산 등 지역 제한 광고그룹 · 조회 지역 미검증으로 자동입찰 차단 · 금액 유지',errorCode:'REGION_UNVERIFIED'});
    return;
   }
