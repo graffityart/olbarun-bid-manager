@@ -3,7 +3,7 @@ import pg from 'pg';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { siteForGroup } from '../lib/ad-sites.ts';
+import { siteForRow } from '../lib/ad-sites.ts';
 
 const sampleArg = process.argv.find(arg => arg.startsWith('--sample='));
 const sample = sampleArg ? Number(sampleArg.split('=')[1]) : null;
