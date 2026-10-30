@@ -1,6 +1,20 @@
 // Pure read-only comparison. User screenshots are contextual evidence, NOT rank attestations.
 import { normalizeAdHost } from './ad-sites.ts';
-export function compareSearchEnvironments({manual, vps}) {
+type SearchDevice = 'PC' | 'MOBILE';
+type ManualObservation = {
+  keyword: string;
+  expectedHost: string;
+  device: SearchDevice;
+  rank: number;
+};
+type VpsObservation = {
+  keyword: string;
+  expectedHost: string;
+  device: SearchDevice;
+  status: string;
+  rank: number | null;
+};
+export function compareSearchEnvironments({manual, vps}: {manual: ManualObservation; vps: VpsObservation}) {
   if (!manual || !vps) throw Error('Both observations required');
   const keyword=manual.keyword;
   const host=normalizeAdHost(manual.expectedHost);
