@@ -33,7 +33,19 @@ try {
   if (response?.status() !== 200) throw Error(`Search HTTP ${response?.status()}`);
   const selector = device === 'PC' ? '#power_link_body > ul.lst_type > li.lst a.lnk_head'
     : 'a.txt_link[onclick*="a=pwl.tit&"]';
-  await page.locator(selector).first().waitFor({ state: 'visible', timeout: 5000 });
+  // An absent ad section is not evidence that the advertiser is out of rank.
+  // Preserve fail-closed behavior and capture diagnostics rather than guessing.
+  try {
+    await page.locator(selector).first().waitFor({ state: 'visible', timeout: 5000 });
+  } catch (waitError) {
+    const adLinkCount = await page.locator(selector).count().catch(() => 0);
+    const adAreaCount = await page.locator(device === 'PC' ? '#power_link_body' : '[class*="power_link"],[id*="power_link"],[class*="ad_area"]').count().catch(() => 0);
+    const error = new Error(adLinkCount === 0 && adAreaCount === 0
+      ? 'AD_SECTION_NOT_OBSERVED: no recognizable Powerlink area or links on the VPS search page'
+      : 'AD_COLLECTION_FAILED: Powerlink area or links present but no visible ad title matched');
+    error.cause = waitError;
+    throw error;
+  }
   if(capture){const path='/tmp/olbarun-rank-'+device.toLowerCase()+'-main.png';await saveEvidence(page,path,'MAIN');}
   const ads = await page.locator(selector).evaluateAll((links, isMobile) => links
     .filter(link => link.getClientRects().length > 0)
