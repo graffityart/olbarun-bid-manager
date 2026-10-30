@@ -46,7 +46,7 @@ async function execute(job,key){
   // Fail closed before any rank observation or Naver bid API write.
   // All account ad groups are Busan-only. Until a trustworthy regional
   // observation provider exists, fail closed for every group, including new ones.
-  await update({state:'failed',stage:'지역 순위 검증',message:'부산 지역 순위 미검증 · 전체 광고그룹 자동입찰 차단 · 금액 유지',errorCode:'REGION_UNVERIFIED'});
+  await update({state:'failed',stage:'지역 순위 검증',message:'일반 PC·모바일 순위는 읽기 전용으로 조회 · 지역 타겟팅과 VPS 검색 위치 일치 미검증 · 자동입찰 차단 · 금액 유지',errorCode:'REGION_UNVERIFIED'});
   return;
   await update({state:'running',message:'우선순위 조회 · 조회 직후 입찰'});
   const raw=await db.query("SELECT data FROM bid_states WHERE id='credentials'");
