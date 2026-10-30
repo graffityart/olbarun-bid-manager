@@ -1,10 +1,18 @@
 import { chromium, devices } from 'playwright';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { unverifiedRegionalObservation } from '../lib/regional-rank.ts';
 import { normalizeAdHost } from '../lib/ad-sites.ts';
 import { mobileMoreBatch,validRankList, matchRank, safeMoreUrl } from '../lib/rank-observation.ts';
 
 const [keyword, rawHost, device = 'PC'] = process.argv.slice(2);
-const capture=process.argv.includes('--capture'),capturePaths=[];
+const capture=process.argv.includes('--capture'),capturePaths=[],captureEvidence=[];
+async function saveEvidence(page,path,stage){
+  await page.screenshot({path,fullPage:true});
+  const bytes=await readFile(path);
+  capturePaths.push(path);
+  captureEvidence.push({stage,path,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length});
+}
 const expectedHost = rawHost && normalizeAdHost(rawHost);
 if (!keyword?.trim() || !expectedHost || !['PC', 'MOBILE'].includes(device)) {
   console.error('Usage: node scripts/rank-check.mjs "keyword" domain PC|MOBILE');
@@ -24,7 +32,7 @@ try {
   const selector = device === 'PC' ? '#power_link_body > ul.lst_type > li.lst a.lnk_head'
     : 'a.txt_link[onclick*="a=pwl.tit&"]';
   await page.locator(selector).first().waitFor({ state: 'visible', timeout: 5000 });
-  if(capture){const path='/tmp/olbarun-rank-'+device.toLowerCase()+'-main.png';await page.screenshot({path,fullPage:true});capturePaths.push(path);}
+  if(capture){const path='/tmp/olbarun-rank-'+device.toLowerCase()+'-main.png';await saveEvidence(page,path,'MAIN');}
   const ads = await page.locator(selector).evaluateAll((links, isMobile) => links
     .filter(link => link.getClientRects().length > 0)
     .map(link => {
@@ -72,7 +80,7 @@ try {
         if ((!appended && moreResponse?.status() !== 200) || !safeMoreUrl(page.url(),keyword,device,appended?1:pageIndex)) throw Error('More page identity changed');
         const moreSelector = device === 'PC' ? '.ad_section.section > ol.lst_type > li.lst' : 'a.txt_link[onclick*="sct.title"]';
         await page.locator(moreSelector).first().waitFor({state:'visible',timeout:Math.min(5000,Math.max(1,deadline-Date.now()))});
-        if(capture){const path='/tmp/olbarun-rank-'+device.toLowerCase()+'-more-'+pageIndex+'.png';await page.screenshot({path,fullPage:true});capturePaths.push(path);}
+        if(capture){const path='/tmp/olbarun-rank-'+device.toLowerCase()+'-more-'+pageIndex+'.png';await saveEvidence(page,path,'MORE');}
         let batch = await page.locator(moreSelector).evaluateAll((items, mobile) => items.filter(el=>el.getClientRects().length).map(el=>{
           const link = mobile ? el : el.querySelector('a.favicon_wrap');
           const title = mobile ? el : el.querySelector('a.tit_wrap');
@@ -137,7 +145,7 @@ try {
     } catch(error) { if(error.message==='Search HTTP 403')throw error; moreError=error.message; moreStatus='unknown'; result={status:'unknown',rank:null,adId:null}; source=null; }
   }
   console.log(JSON.stringify(unverifiedRegionalObservation({keyword,expectedHost,device,observedAt:new Date().toISOString(),...result,
-    capturePaths,source,mainRank,moreRank,mainObservedCount:ads.length,moreObservedCount,morePages,moreStatus,moreError,
+    capturePaths,captureEvidence,source,mainRank,moreRank,mainObservedCount:ads.length,moreObservedCount,morePages,moreStatus,moreError,
     observedCount:source==='MORE'||morePages>0?moreObservedCount:ads.length,ads:observedAds,
     mainAds:ads.map(({rank,adId,displayUrl,title})=>({rank,adId,displayUrl,title})),
     moreAds,
