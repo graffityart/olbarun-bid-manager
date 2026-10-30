@@ -25,11 +25,16 @@ try {
     const manualRank = validManualRank ? rank : null;
     const vpsRank = Number.isSafeInteger(v?.rank) && v.rank > 0 ? v.rank : null;
     const vpsStatus = typeof v?.status === 'string' ? v.status : 'unknown';
+    const manualTime = typeof m?.observedAt === 'string' ? Date.parse(m.observedAt) : NaN;
+    const vpsTime = typeof v?.observedAt === 'string' ? Date.parse(v.observedAt) : NaN;
+    const timeDifferenceMinutes = Number.isFinite(manualTime) && Number.isFinite(vpsTime)
+      ? Math.round(Math.abs(manualTime - vpsTime) / 60000) : null;
     devices[device] = {
       manualRank, manualObservedAt: typeof m?.observedAt === 'string' ? m.observedAt : null,
       manualLocationClaim: typeof m?.location === 'string' ? m.location : null,
       manualEvidence: typeof m?.evidence === 'string' ? m.evidence : null,
-      vpsRank, vpsStatus,
+      vpsRank, vpsStatus, vpsObservedAt: typeof v?.observedAt === 'string' ? v.observedAt : null,
+      timeDifferenceMinutes, timeComparable: timeDifferenceMinutes !== null && timeDifferenceMinutes <= 5,
       comparison: manualRank === null ? 'NO_MANUAL_RANK' :
         vpsRank === null ? 'MANUAL_VISIBLE_VPS_NOT_OBSERVED' :
         manualRank === vpsRank ? 'RANKS_EQUAL_UNVERIFIED_ENVIRONMENTS' : 'RANK_DIFFERENCE',
