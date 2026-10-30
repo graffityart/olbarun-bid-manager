@@ -44,6 +44,7 @@ try {
   let source = result.status === 'visible' ? 'MAIN' : null;
   let moreRank = null, moreObservedCount = 0, morePages = 0, moreStatus = null;
   let observedAds = ads;
+  let moreAds = [];
   let moreError = null;
   // Use the mobile search page's actual More link; never use PC results as mobile ranks.
   const moreLinks = await page.locator('a[href]').evaluateAll(links => links
@@ -92,6 +93,7 @@ try {
         collected.push(...batch);
         if (!validRankList(collected,1,device==='MOBILE')) throw Error('Duplicate more ad IDs');
         morePages=pageIndex; moreObservedCount=collected.length;
+        moreAds=collected.map(({rank,adId,displayUrl,title})=>({rank,adId,displayUrl,title}));
         const found = matchRank(collected.slice(0,100),expectedHost); moreStatus=found.status;
         if (found.status==='unknown') throw Error('Multiple matching ads');
         if (found.status==='visible') {result=found;source='MORE';moreRank=found.rank;observedAds=collected;break;}
@@ -137,6 +139,8 @@ try {
   console.log(JSON.stringify(unverifiedRegionalObservation({keyword,expectedHost,device,observedAt:new Date().toISOString(),...result,
     capturePaths,source,mainRank,moreRank,mainObservedCount:ads.length,moreObservedCount,morePages,moreStatus,moreError,
     observedCount:source==='MORE'||morePages>0?moreObservedCount:ads.length,ads:observedAds,
+    mainAds:ads.map(({rank,adId,displayUrl,title})=>({rank,adId,displayUrl,title})),
+    moreAds,
     note:'Read-only observation from this VPS. Busan region is NOT verified. More ranks are separate from main search ranks. No ad clicks or bid changes.'}),null,2));
 } catch (error) {
   console.log(JSON.stringify(unverifiedRegionalObservation({ keyword, expectedHost, device, status: 'unknown', rank: null,
