@@ -55,7 +55,9 @@ try {
     // Store separately from settings: a collection never overwrites bid or target.
     await save(`rank:${state.device}:${row.id}`, { id: row.id, keyword: row.keyword,
       device: state.device, host, status: result.status, rank: result.rank,
-      source: result.source ?? null, adId: result.adId ?? null, mainRank: result.mainRank ?? null,
+      source: result.source ?? null, region: result.region ?? { code: 'KR-26', verified: false, reason: 'Search location not verified' },
+      searchScope: 'GENERAL_SEARCH_UNVERIFIED_LOCATION', targetingAssumption: 'BUSAN_OR_LOCATION_UNKNOWN',
+      adId: result.adId ?? null, mainRank: result.mainRank ?? null,
       moreRank: result.moreRank ?? null, moreObservedCount: result.moreObservedCount ?? 0, moreStatus: result.moreStatus ?? null,
       observedCount: result.observedCount ?? 0, observedAt: result.observedAt ?? new Date().toISOString(),
       error: result.error ?? null });
