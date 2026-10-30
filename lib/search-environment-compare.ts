@@ -24,7 +24,7 @@ export function compareSearchEnvironments({manual, vps}: {manual: ManualObservat
   const manualRank=manual.rank;
   if (!Number.isInteger(manualRank) || manualRank < 1 || manualRank > 100) throw Error('Manual visible rank required');
   if (vps.status !== 'visible' && vps.status !== 'not_in_observed_list') throw Error('VPS observation inconclusive');
-  if (vps.status === 'visible' && (!Number.isInteger(vps.rank) || vps.rank < 1)) throw Error('Invalid VPS rank');
+  if (vps.status === 'visible' && (vps.rank === null || !Number.isInteger(vps.rank) || vps.rank < 1)) throw Error('Invalid VPS rank');
   const different = vps.status !== 'visible' || vps.rank !== manualRank;
   return {
     keyword, expectedHost:host, device:manual.device,
