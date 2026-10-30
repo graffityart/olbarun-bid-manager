@@ -19,11 +19,13 @@ if (!keyword?.trim() || !expectedHost || !['PC', 'MOBILE'].includes(device)) {
   process.exit(1);
 }
 const browser = await chromium.launch({ headless: true });
+let diagnosticPage = null;
 try {
   const context = await browser.newContext(device === 'MOBILE'
     ? { ...devices['iPhone 13'], locale: 'ko-KR' }
     : { locale: 'ko-KR', viewport: { width: 1365, height: 900 } });
   let page = await context.newPage();
+  diagnosticPage = page;
   const url = new URL(device === 'MOBILE'
     ? 'https://m.search.naver.com/search.naver' : 'https://search.naver.com/search.naver');
   url.searchParams.set('query', keyword);
@@ -66,7 +68,7 @@ try {
   const deadline = Date.now() + 150000;
   if (valid && result.status === 'not_in_observed_list' && moreUrl) {
     // Match the standalone successful mobile test: a fresh tab in the same context.
-    if(device==='MOBILE'){const mainPage=page;page=await mainPage.context().newPage();await mainPage.close();}
+    if(device==='MOBILE'){const mainPage=page;page=await mainPage.context().newPage();diagnosticPage=page;await mainPage.close();}
 
     const collected = [];
     let appended = false;
@@ -151,7 +153,21 @@ try {
     moreAds,
     note:'Read-only observation from this VPS. Busan region is NOT verified. More ranks are separate from main search ranks. No ad clicks or bid changes.'}),null,2));
 } catch (error) {
+  let failureCaptureError = null;
+  if(capture && diagnosticPage && !diagnosticPage.isClosed()) {
+    try {
+      const path='/tmp/olbarun-rank-'+device.toLowerCase()+'-failure.png';
+      await saveEvidence(diagnosticPage,path,'FAILURE');
+    } catch(captureError) { failureCaptureError=String(captureError.message ?? captureError); }
+  }
+  let pageDiagnostics = null;
+  if(diagnosticPage && !diagnosticPage.isClosed()) {
+    try {
+      pageDiagnostics={url:diagnosticPage.url(),title:(await diagnosticPage.title()).slice(0,160),
+        bodyPreview:(await diagnosticPage.locator('body').innerText({timeout:2000})).slice(0,500)};
+    } catch(_) { /* Diagnostics must never override original error. */ }
+  }
   console.log(JSON.stringify(unverifiedRegionalObservation({ keyword, expectedHost, device, status: 'unknown', rank: null,
-    error: error.message }), null, 2));
+    error: error.message,capturePaths,captureEvidence,failureCaptureError,pageDiagnostics }), null, 2));
   process.exitCode = 1;
 } finally { await browser.close(); }
